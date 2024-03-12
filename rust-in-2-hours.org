@@ -1,0 +1,16 @@
+#+TITLE: Rust in 2 hours
+#+AUTHOR: Aleksandr Petrosyan
+
+* Preface
+This is a high level overview document about the Rust programming language.  The reason this document exists is to provide people who have to learn Rust at some point a general overview, without the usual dogmatism.  This is good to nudge teams that were considering Rust to using it and to avert catastrophe for projects for which it is a poor fit.
+
+I firmly believe that either a blind endorsement or misinformed dogmatic rejection of the language are both detrimental to society.  Despite my humble expertise in Rust, and a relatively good overview of programming languages, I believe that this document can be a valuable tool.  However, this is in no way an in-depth analysis, and I would recommend using this document as a start for one's own research using the provided resources.
+
+* Rust's paradigm
+Rust is a multi-paradigm programming language that supports procedural, object-oriented and functional programming as well as relatively niche paradigms such as actor-based programming.  However, it does not fit into either of those niches completely.  In conjunction with relatively good performance, a vibrant community and a reliance on the =libc= as the only runtime component, Rust can fill the niches previously occupied by C++, while its choice to support a limited form of compile-time user-specified code transformation/generation (via procedural macros) allow it to compete with Python and Go for backend development.
+
+Rust is a complex language.  Much of its complexity stemming from the rules imposed by the language designers, rather than the sheer number of features.  Procedural macros allow library developers to impose additional rules, which more often than not allows Rust to be explored by trial and error.  For someone well-versed in Haskell and C++, required reading to learn Rust can be reduced to none, as the process from installing =rustup= to running =cargo build= is self documenting.
+
+Rust is a language that plants itself firmly in the camp of pragmatic long feedback cycle development.  A proficient Rust engineer is able to skirt around and anticipate compilation errors, which given strict typing, strong soundness requirements and many issues particularly pertaining to incomplete and/or unimplemented features, is a lot harder than one would aniticipate.
+
+Rust programming is unlike programming in other systems programming languages, as it does not allow the programmer to defer confronting problems, and over-abstract to hide poor design decisions.  It is a language best suited for programming libraries, with a similarly robust toolkit for producing complete 
