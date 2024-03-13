@@ -33,6 +33,8 @@ It is a flourishing ecosystem of libraries, packages and professionals.
 
 * Procedural Rust
 
+
+
 Rust has a pragmatic approach to procedural programming.  In most situations, one is encouraged to write the code in a procedural style, without over-abstraction.
 
 ** Hello world
@@ -43,6 +45,8 @@ To start things off, this is what a hello-world program would look like[fn:1].
   }
 #+END_SRC
 The =main= function is an OS entrypoint.  The Rust compiler abstracts the unix-specific aspects of the entrypoint: note the absence of arguments as input, the usage of the =println!= macro in lieu of the =libc= =printf= function, lack of return in either the signature of main, or implicit =return 0=.  For all intents and purposes, these abstractions are almost never a problem, and allow the programmer to live in a world of coherent abstractions.
+
+** TODO Crates, compilation, cargo
 
 ** Variables
 
@@ -242,23 +246,211 @@ The borrow checker algorithm is not perfect; whenever it sees code that *could* 
 For situations where that would lead to great inefficiencies, users are to use =unsafe=, however, it is highly recommended to avoid =unsafe=, unless one has exhausted all other possibilities.
 #+END_ASIDE
 
+One final point to cover is references to arrays.  In Rust arrays of two different sizes have two different types.  This necessitates introducing two ways of borrowing an array: =&[u8; 3]= which is a single machine word "pointer" to the beginning of the array (with the size known at compile time), and =&[u8]=, a fat pointer containing the length as part of the runtime parameters, which is known as a slice.
 
+Both use the same syntax, but given that compile time information provides room for optimisations, the programmer is given no control over which borrow occurs for any given scenario.
 
+** Operators
+
+Rust operators are strictly typed.  This means that in =a+b=, both =a= and =b= must be of the same type.  Some types, for which other languages provide an automatic coercion, /e.g./ =u8= to =u16=, must be explicitly cast to the appropriate type:
+#+BEGIN_SRC rust
+  let a = 1u8;
+  let b = 2u16;
+  let c = a + (b as u8);			// Truncation warning
+  let d = (a as u16) + b;
+  let err = a + b;				// Type Error
+#+END_SRC
+
+Rust permits truncating conversions, but the static analysis tool =clippy= is able to quickly find and warn about these problems.
+
+Rust operators are overloaded and user-overload-able, via the =trait= mechanism which we shall cover in the object-oriented part of this book.  For the time being, suffice it to say that the plus operator that acts on =u16= is not the same as =+= acting on =u8=.  This shall become important when dealing with strings.
 
 ** Functions
 
-Rust calls procedures functions, without differentiating side-effect-free functions from procedures.  Out-parameters, are generally accepted, but not common.  Function signatures as well as argument type declarations are right-associative.
+Rust calls procedures[fn:8] functions, without differentiating side-effect-free functions from procedures.
+
+Function signatures as well as argument type declarations are right-associative.
 
 #+BEGIN_SRC rust
   fn function(arg1: u32, arg2: i32, arg3: u128) -> u128 {
 	  arg3
   }
 #+END_SRC
-Functions are considered to evaluate to the value to which the body block evaluates to.  In this example the body is equivalent to =return arg3=.
+Functions  evaluate to the value of the block that constitutes its body.  In this example the function body could be rewritten to =return arg3;= without changing anything.
+
+No type outside the function body is inferred, so the function must always specify the type of each argument.
+
+All data that the function is allowed to read comprises its arguments and special global values defined using the =const= keyword.  For the time being it can be assumed that this implies that no global shared state is permitted, but as we shall see later, this is not the case.
+
+The functions must rigidly adhere to the type signature.  No implicit conversions in standard functions is permitted to occur, so arguments must be explicitly cast at the call site.
+
+Functions that do not participate in C-ABI linkage are not variadic.
+
+** Introduction to Macros
+
+Macros are one of the key differentiating factors of Rust from other systems programming languages.  Macros are typically used to generate valid Rust code that no reasonable human being would be able to interpret or write, in addition to imposing other restrictions.
+
+Macros do not have access to the type system, but thanks to strict typing, macros can typically do rudimentary type checking by hijacking the type checking in the generated code.
+
+As such, there are multiple types of macros, of which we shall only cover one type: function-like macros.
+
+Unlike functions, which have a fixed number of arguments, and are strictly type checked, a function-like macro can accept any form of input.  Technically all macros accept one argument, but that argument can be a delimited collection of expressions, which act as if they were a variadic function or macro.
+
+We have already seen one example, the =println!= macro.  All function like macros are postfixed by an exclamation mark to differentiate them from functions.
+
+** The formatting mini-language
+
+The =println= macro is worth going into.  The first "argument" of =println!= is a format "string".  Unlike =printf= in C, this argument string is not an actual string[fn:11], and must be specified in-line as a string literal.  This format string is parsed at compilation time, and if there are no format markers, the string is printed as is.
+
+The format markers constitute a mini-language.  Most primitive types can be printed directly, via an empty pair of curly braces:
+#+BEGIN_SRC rust
+  let answer = 42;
+  println!("Hello world! The answer is {}", answer);
+#+END_SRC
+The empty pair is called a positional format marker, and for each positional format marker, there must be a comma delimited in-line list of variables that must be printed, in the order specified by positional format markers.
+
+Named format markers allow one to assign a name in the format string, and in the variable list, assign variables to the named markers.  If the name of the format marker corresponds to an in-scope variable, the assignment can be omitted.
+
+#+BEGIN_SRC rust
+  let world_ordinal = 3;
+  println!("Hello World number {world}! The answer is {answer}", world=world_ordinal)
+#+END_SRC
+
+#+BEGIN_ASIDE
+My personal recommendation is to consider using /named/ format markers almost always; definitely in cases where there's more than one format marker.
+
+Additionally, I should advise against mixing positional and named markers.
+#+END_ASIDE
+
+One has access to a rich set of formatting options, including
+- fill,
+- alignment,
+- width
+- formatting of numerical literals in many bases, including binary, hexadecimal, octal.
+- Precision control for floating point numbers
+- Localisation (for locales where the decimal separator is different) etc.
+
+#+BEGIN_ASIDE
+The =println!= and =eprintln!= macros (printing to =stderr=) are included in the so-called prelude.  This is a collection of commonly used constructs that are imported by default.
+#+END_ASIDE
+
+
+** Modules
+
+Rust has a robust system of modules and namespaces.  Many objects, including constants, functions and modules accept visibility modifiers.  Everything is private by default, unless specified otherwise by prefixing the =pub= keyword.
+
+Modules constitute a tree, with one root, known as the top-level module[fn:9].  The nested modules can refer to the top level module as =crate=, and their immediate[fn:10] parent module as =super=.   To access members within a module, one uses the =::= syntax borrowed from C++.
+
+#+BEGIN_SRC rust
+  pub mod thing {
+	  pub const CONST: u8 = 32;
+
+	  mod thing2 {
+		  pub const CONST: u8 = 42;
+		  // Warning, module private, can't see the `pub`.
+	  }
+
+	  pub(super) thing3 {
+		  pub const CONST: u8 = 42;
+	  }
+	  pub const CONST2: u8 = thing3::CONST;
+  }
+
+  mod thing2 {
+	  pub const CONST: u8 = super::thing::CONST;
+	  pub mod thing3 {
+		  pub const CONST: u8 = crate::thing::CONST;
+		  // This is identical to `thing2::CONST`
+	  }
+	  pub const CONST2: u8 = super::thing::thing3::CONST;
+	  // Error, thing3 is visible to `thing`
+  }
+
+  mod file_mod;			// Lives in a file `file_mod.rs`
+#+END_SRC
+
+All constructs must be either fully qualified or imported with the =use= keyword.
+
+#+BEGIN_ASIDE
+Unlike C++, the usage of =use= is not problematic.  Rust does not allow two functions with separate definitions to be imported into the same namespace, so a functional call always resolves unambiguously and the definition even for generic functions is always local.
+#+END_ASIDE
+
+The =use= keyword allows shorthand import of multiple constructs, with short-hand notation for all public items belonging to a particular module.
+
+#+BEGIN_SRC rust
+  use file_module::submod::{fun1, fun2, self}
+  // Allows referring to `submod::` directly 
+
+  mod file_module;
+  // The mod declaration can come after the imports
+
+  pub mod thing {
+	  use super::*;
+	  // modules don't inherit parent imports
+  }
+#+END_SRC
+
+Use statements are effective for the block in which they are written.  So, having use statements confined to a block is useful when one wants to avoid using fully-qualified paths[fn:12].
+
+Rust's module system supports what's known as a re-export.
+
+#+BEGIN_SRC rust
+  pub mod file_mod;
+
+  pub mod parent {
+	  pub mod sibling1 {
+		  use file_mod::func1;
+	  }
+
+	  pub mod sibling2 {
+		  pub use file_mod::func1;
+	  }
+
+	  use sibling1::func1;
+	  // Illegal
+	  use sibling2::func1;
+	  // Legal, re-export
+  }
+#+END_SRC
+
+This allows programmers to present a flat structure to the end user, while retaining internal organisation.  The use keyword combined with the =as= keyword, allows renaming the values in the exported scope.
+
+It is also a common practice to provide all the constructs that the user is likely to import in a single submodule known as a =prelude=.
+
+Unlike the standard library prelude, it must be explicitly glob-imported.
+
+#+BEGIN_SRC rust
+  pub mod macro;
+
+  pub mod prelude::{useful_function, macro::useful_macro, UsefulStruct};
+#+END_SRC
+
+** Overall
+
+Rust is an average procedural language.
+
+Compared to languages like FORTRAN and C, it is extremely difficult not to over-step the boundaries of the procedural subset; as such Rust is a poor substitute for code bases that only want to substitute a poorly supported procedural language, without adopting any aspects of either functional or OOP styles.
+
+The experience of writing purely procedural Rust is akin to programming in PASCAL.  Despite the surgical adjustments, namely the introduction of slices, the restrictions imposed by the borrow checker contribute to a significantly slower development process as compared to C, or Go, in a purely procedural context.
+
+As such, Rust should not be regarded as either exclusively or primarily procedural.
+
+* Object Oriented Programming in Rust
+
+Rust is a pragmatic OOP language.  It is as conceptually distant from a class-based OOP language (/e.g./ Java, C++) as it is from the Smalltalk family.  Rust has deliberately eschewed language features that serve to enable programmers to over-abstract and include too many indirections.  It has effective tooling for both dynamic and static polymorphism, strong encapsulation guarantees, and is the first language to explicitly codify the objects' lifetimes.
+
 
 
 
 * Footnotes
+[fn:12] This is most useful in using =enums= which we shall talk about later. 
+
+[fn:11] Which we have not covered in this section, as they do not work as strings in procedural languages. 
+[fn:10] As in =super::super= is not the parent of the parent.
+
+[fn:9] That module is almost always a file =lib.rs= in the =src/= subdirectory of the project.
+
+[fn:8] Out-parameters, are generally accepted, but not common.
 
 [fn:7] A point that is somewhat frustrating to new users is that taking a mutable borrow invalidates any immutable borrows.
 
