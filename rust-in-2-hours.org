@@ -640,6 +640,7 @@ the syntax =<Type as Trait>::method= is sometimes called the turbofish.
 A function associated to a trait can be called only if that trait is in scope.  The trait =Clone= is imported as part of the standard library =prelude=, but other traits must be imported manually before use.  If two traits have an associated function of the same name, each =.method= call must be rewritten as =<Type as Trait>::method= turbofish.  This is technically a form of static polymorphism, but not particularly interesting.
 
 *** Generics
+**** Structure and function basics, trait bounds
 Rust supports generics via templates.  Like in C++ both structures and functions can be made generic.  What this means is that for each instance of a generic structure template, a new structure definition is created.  These structures are considered distinct types in all but generic functions.
 #+BEGIN_SRC rust
   struct Complex<T: Copy + Default> {
@@ -668,7 +669,8 @@ Note that we must provide constraints which are at least the same or more constr
 #+END_SRC
 In this example, we rely on the fact that if a type =T= implements both =PartialEq= which defines the equality operation and =Eq= which states that for all valid values of =T= an equality comparison has all the usual properties, and always yields a boolean value, then we can ask of =Complex<T>= if it is the =default=.
 
-This example is for illustration purposes only; most new programmers in Rust will fall into a few common traps which we shall mention here, and fix later.
+**** Blanket implementations
+The above example is for illustration purposes only; most new programmers in Rust will fall into a few common traps which we shall mention here, and fix later.
 
 Specifically, we assume that the implementation of =Complex<T>::default= is recursive and comprises the defaults of =real= and =imaginary=.  This is true assuming no other code exists, but may not be true in general.  In fact, assuming the code that we have presented as examples is the only code that there is, the concept of =Complex<T>::default= is not defined.  So we should provide an implementation for that:
 #+BEGIN_SRC rust
@@ -681,14 +683,79 @@ Specifically, we assume that the implementation of =Complex<T>::default= is recu
 	  }
   }
 #+END_SRC
-This is called a /blanket implementation/, as it covers more than one type =T= in this set.  Blanket implementations are useful, but not as much as one might expect at first glance, because unfortunately, trait implementations that can overlap either now or hypothetically in the future, are both covered by 
+This is called a /blanket implementation/, as it covers more than one type =T= in this set.  Blanket implementations are useful, but not as much as one might expect at first glance, because unfortunately, trait implementations that can overlap either now or hypothetically in the future, are both covered by a blanket implementation there is a conflict that cannot be resolved at present.
 
-Here we must note that if we had omitted the =Default= trait bound in the definition of =Complex<T>= we would still have a sound set of functions.  It is only sensible to consider if =Complex<T>= is the default if said default is defined.  But due to the constraints inherent in Rust's trait system, we would not be able to define =is_default= as easily, so we have chosen to require that the =T= be =Default= for all valid =Complex<T>= types.  We shall see later how this could be done with more sophisticated =where= clauses.
+In this example we must note that if we had omitted the =Default= trait bound in the definition of =Complex<T>= we would still have a sound set of functions.  It is only sensible to consider if =Complex<T>= is the default if said default is defined.  But due to the constraints inherent in Rust's trait system, we would not be able to define =is_default= as easily, so we have chosen to require that the =T= be =Default= for all valid =Complex<T>= types.  We shall see later how this could be done with more sophisticated =where= clauses.
 
 #+BEGIN_aside
 Because of the way that this system is set up, we can always know for certain where the function called in each particular case is defined.  One knows that a function can only be defined once, and never overloaded, so a regular expression search is all one needs to find where a particular function is defined.
 #+END_aside
-** Ownership, and =Drop=
+
+**** =From= and =Into=
+
+One of the most important applications of generic functions is in conversions between types.  In general only numerical types and pointers can be cast using the =as= keyword.  Every other kind of conversion is done via either =From=, =Into= or =AsRef=.
+
+These traits cover the different possible conversions scenarios, so it is worth exploring them.
+
+=From= should be the first trait to consider.  It simply states that two types can be infallibly converted into one another.   A good example is considering how we can convert an array of floating point numbers into =Complex<f64=.
+
+#+BEGIN_SRC rust
+  impl From<[f64;2]> for Complex<f64> {
+	  fn from(value: [f64; 2]) -> Self {
+		  Self { real: value[0], imaginary: value[1] }
+	  }
+  }
+#+END_SRC
+
+This can be invoked like so
+#+BEGIN_SRC rust
+  let complex = Complex::from([1.0, 0.0]);
+#+END_SRC
+
+Here we can demonstrate the importance of providing blanket implementations.  Suppose we had a function which accepts =Complex<f64>= as an argument, /e.g./
+#+BEGIN_SRC rust
+  fn rotate_90(number: Complex<f64>) -> Complex<f64>;
+#+END_SRC
+we can now invoke this function in a way which closely mimics implicit conversions:
+#+BEGIN_SRC rust
+  rotate_90([1.0, 0.0].into())
+#+END_SRC
+This all because for all types =A=, and =B= such that each =B= implements =From<A>= the inverse trait =Into<B>= is implemented for each =A=.  As such, one gets two trait implementations at the cost of one.  Unfortunately, implementing =Into<B>= for some =A= does not automatically implement =From<A>= for =B=, at least not yet, so one should always consider implementing =From= if possible.
+
+**** Custom traits
+
+The Rust programmer is encouraged to introduce traits.  A typical trait definition is akin to an interface in Java.  Traits can have associated types, associated constants, and associated functions.  Each can have a default implementation that can also be overridden for each concrete type.
+#+BEGIN_SRC rust
+  pub trait HaveItAll {
+	  pub const DEFAULT_CONST: u32 = 0;
+	  pub type DefaultType = u32;
+	  pub type MustBeClone: Clone;
+	  pub const CONST: MustBeClone;
+
+	  fn get_const(&self) -> Self::MustBeClone {
+		  Self::CONST
+		  // Can override
+	  }
+
+	  fn must_implement(&self, other: Self::DefaultType) -> Self::MustBeClone;
+  }
+#+END_SRC
+
+In Rust a trait can require the implementation of another trait known as a /supertrait/.  Trait inheritance is the only kind of inheritance that Rust supports.
+#+BEGIN_SRC rust
+  pub trait CopyExtension: Clone + Debug {
+	  fn copy(&self) -> Self {
+		  println!("{:?}", self);
+		  self.clone()
+	  }
+  }
+#+END_SRC
+
+
+
+
+**** Ownership, and =Drop=
+
 
 Rust is a RAII language.  This coupled with the borrow checking rules implies that one can safely de-allocate any structure as soon as it reaches the end of the scope in which it is defined.  But this is only true of simple structures, those that implement =copy= as some structures may need to perform complex housekeeping to safely stop existing.
 
@@ -726,9 +793,163 @@ For example, if a value is returned from a function it must be bound to a variab
 #+END_SRC
 in such circumstances it is common to see the following construct.  Also note the underscore in the =_keep_alive=; without it the static analyser will warn about =keep_alive= being unused.  So be cautious of naming your variables, including fields with underscores prefixed or postfixed.
 
+**** =AsRef=, =Deref= and Smart pointers
+
+The reason why we needed to cover ownership was to introduce the concept of a smart pointer.
+
+To cover ground where ownership hierarchies are unsuitable, Rust borrowed an idea from C++11.  Namely to create special wrapping types known as smart pointers whose construction is meant to replicate manual memory management patterns on types, without the programmer writing boilerplate.
+
+=Box<T>= is a unique pointer to a heap-allocated =T= that de-allocates the heap memory when it goes out of scope.  =Rc<T>= is a reference counted pointer that is used when multiple objects need to share a resource.  =Arc= is atomically-reference counted which can be used when the objects referencing the shared object are in different threads.
+
+The mechanism by which the use of these smart pointers is practical is known as dereference aliasing.  Implementing the trait =AsRef<T>= signals to the programmer and the compiler that the object in question can give a reference to a valid structure of type =T=.  For example,
+#+BEGIN_SRC rust
+  pub struct Zoo {
+	  ape: Ape,
+	  crocodile: Crocodile,
+	  parrot: Parrot,
+  }
+#+END_SRC
+can reasonably provide implementations for =AsRef<Ape>=, =AsRef<Crocodile>= and =AsRef<Parrot>=, even though this usage is discouraged[fn:14].
+
+Implementing the trait =Deref= signals to the compiler that the object should be regarded as a pointer to the type =T=.  Specifically, in
+#+BEGIN_SRC rust
+  let boxed_parrot = Box::new(Parrot::default());
+
+  boxed_parrot.parrot_method();
+#+END_SRC
+because =Box<Parrot>= implements =Deref= with the associated type =Target= set to =Parrot=, or in Rust notatoin =Deref<Target=Parrot>= the call to the function =parrot_method= is unambiguous, and no further indirection is needed.
+
+#+BEGIN_aside
+While it is tempting to use these traits to create a form of object inheritance, this is strongly discouraged.  The =Deref= and =AsRef<T>= traits should only be implemented if one truly wishes to represent a pointer to a type, as this is the intention being communicated.
+#+END_aside
+
+*** Trait objects
+
+The final and most delicate mechanism is late binding.
+
+Rust supports dynamic dispatch via type erasure and so-called fat-pointers[fn:15].  Because the sizes of all implementations of a certain trait are not guaranteed to be identical, one must do explicitly in Rust what Java does implicitly.  Namely all dynamically dispatched objects in Rust must be heap-allocated and managed via borrow/smart pointer.
+
+The most common application is a heterogeneous collection of objects that implement the same trait, in error handling, but these objects can be used directly by borrow, consider the trait defined as
+#+BEGIN_SRC rust
+  trait HasNorm {
+	  fn norm(&self) -> f64;
+  }
+
+  impl HasNorm for Complex<f64> {
+	  fn norm(&self) -> f64 {
+		  self.real * self.real + self.imaginary * self.imaginary
+	  }
+  }
+
+
+  impl HasNorm for Complex<f32> {
+	  fn norm(&self) -> f64 {
+		  (self.real * self.real + self.imaginary * self.imaginary) as f64
+		  // Demonstration purposes only
+	  }
+  }
+#+END_SRC
+
+we can define a polymorphic function that can accept either a reference to =Complex<f64>= or =Complex<f32>=, or any type that implements =HasNorm= as follows:
+
+#+BEGIN_SRC rust
+  fn modulus(value: &dyn HasNorm) -> f64 {
+	  let norm = value.norm();
+	  norm.sqrt()
+  }
+#+END_SRC
+
+This approach is different to /e.g./
+#+BEGIN_SRC rust
+  fn modulus<T: HasNorm>(value: &T) -> f64 {
+	  let norm = value.norm();
+	  norm.sqrt()
+  }
+#+END_SRC
+in the following way.  The dynamically dispatched function exists in one place.  If for example, we have \(n\) functions defined as dynamically dispatched, and \(m\) implementations of =HasNorm=, then there are \(n\) functions and \(m\) vtables.  By contrast each generic function is instantiated for each implementor of =HasNorm=.   We have a multiplicative explosion of code paths, a reduction in code locality, in exchange for potentially[fn:16] better performance if the virtual calls can be converted to different code paths.
+
+There are situations in which trait-object based code is clearer, particularly if the concrete type is too verbose or necessitates a large number of trait bounds to be repeated.  More on that later.
+
+Dynamic dispatch imposes its limitations.  Type erasure means that only the information about the objects implementation of a particular trait can be used.  For example, if the object was converted to =&dyn HasNorm= and there is neither a supertrait nor a blanket implementation of =Debug= for all implementors of =HasNorm=, then an said object can no longer be printed.
+
+#+BEGIN_aside
+One example of inconvenience imposed by type erasure is the =std::io::Error= type.  It wraps a =Box<dyn std::error::Error>= trait object, as a result of which a =std::io::Error= objects cannot be cloned.  While there are ways of making trait objects =Clone= almost all of them involve changing the trait, which in case of =std::error::Error= would result in almost all Rust code being broken.
+#+END_aside
+
+** Encapsulation
+
+Rust provides a robust set of interlocking features that make it an excellent language to write encapsulated code.
+
+We have noted earlier that it is exceedingly rare to see =getters= and =setters= in Rust, and even then more often than not, as a result of needing to manipulate Rust objects from a different programming language via a Foreign function interface (FFI).
+
+This is because the borrow checker and immutable-by-default variables impose enough restrictions to preserve structure invariants by other methods.  Because one does not have inheritance, one has to choose composition.  Because most values are passed by move and immutable, one is encouraged to construct new values instead of mutating the old ones in place.
+
+Technically speaking the only other place where Rust getters and setters are used in earnest are in the builder pattern, but even then they are used as syntactic sugar for constructing a new value, rather than for the purposes of preserving an invariant.  Because it is easier to construct a new immutable value, the focus in Rust has shifted away from imposing instance invariants towards type invariants enforced at construction and propagated by immutability.
+
+To demonstrate the difference in philosophy consider the following example.  When implementing a builder for a type in Rust, one is ordinarily accepting =self= by move and returning a new value.
+
+This permits a pipeline style that was popularised in Java with the introduction of anonymous functions, and in C++ with the introduction of ranges.
+#+BEGIN_SRC rust
+  let thing: File = OpenOptions::new()
+	  .read(true)
+	  .open(path)
+#+END_SRC
+
+Unfortunately, there are situations in which shared data indeed needs to be mutated.  For example the database in a server must be mutable and able to respond to requests handled by, potentially, different threads.
+
+In Rust, immutable borrows aren't really immutable, but encapsulated.  By that I mean that =RefCell=, =Mutex=, =RwLock=,  the numerical types in =std::sync::atomic=, all allow mutating the state of objects through an immutable borrow.  The logic behind this is that if the programmer knows what they are doing, they can safely mutate shared state.  The preferred way to do this, is by relying on the programmers of the Rust standard library or any of the crates on crates.io, to have ensured that mutation via the public API of =Mutex= does not produce undefined behaviour, or errors due to concurrent modification.
+
+
+
+
+*** TODO Mention pointers and unsafe
+*** TODO Mention array index notation in the /procedural/ chapter
+* Appendix
+
+**** Worked example: custom traits
+
+We must now consider how one can define traits, on a practical example.  The above =Complex<T>= structure definition allows one to construct types that are not sensible: for example =Complex<bool>= or =Complex<char>=.  We would like to differentiate the primitive types that represent numbers from other general primitive types.
+
+#+BEGIN_SRC rust
+  pub trait Numerical {}
+#+END_SRC
+Our first stop is what's called a /marker trait/.  The implementation of this trait is low-effort and can theoretically be done for all possible types.  For example,
+#+BEGIN_SRC rust
+  impl Numerical for u64 {}
+#+END_SRC
+/marks/ =u64= as =Numerical=.
+
+We can assume that given that we are not going to have such statements for =char= and =bool= that amending the structure definition of =Complex<T>= to
+#+BEGIN_SRC rust
+  pub struct Complex<T: Numerical> {
+	  real: T,
+	  imaginary: T
+  }
+#+END_SRC
+would be enough.  But this will result in =Complex<T>= being rather awkward to use.  At present it can neither be cloned nor printed, nor indeed compared for equality.  Arithmetic cannot be defined over complex numbers, because having a generic function of the form
+#+BEGIN_SRC rust
+  impl<T: Numerical> Complex<T> {
+	  fn norm(&self) -> T {
+		  self.real * self.real + self.imaginary * self.imaginary
+	  }
+  }
+#+END_SRC
+would not compile.
+
+So at this point we must consider which properties of =T= are intrinsic to =Complex<T>= being useful as a complex number, and which are helpful, but not required.
+
+Firstly, consider how a complex number is defined in abstract mathematical terms and how that definition is different from /e.g./  a two dimensional vector.
+
+
 
 
 * Footnotes
+[fn:16] While writing code via generics guarantees that it will be monomorphically dispatched, trait object code can also be de-virtualised by LLVM.
+
+
+[fn:15] The slice is an example of a fat pointer, in that =&[u8]= is both a reference to the first element of the array, and the length of said array.
+
+[fn:14] The reason is simple.  If your function accepts a =&Parrot= you should invoke =&zoo.parrot=, rather than =zoo.as_ref()=.
 
 [fn:13] Although historically dynamic linkage was preferred.
 [fn:12] This is most useful in using =enums= which we shall talk about later.
