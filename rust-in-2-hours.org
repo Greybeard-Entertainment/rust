@@ -464,7 +464,7 @@ in case there is a local variable with a suitable type, the colon can be omitted
   let number_two = Complex { real, imaginary };
 #+END_SRC
 
-Note that naming structures in Pascal case is strongly encouraged.  Failure to do so produces a compilation warning.  
+Note that naming structures in Pascal case is strongly encouraged.  Failure to do so produces a compilation warning.
 
 Structures don't have a well-defined layout.  This implies that most Rust code links statically[fn:13], and intrinsically means that if two structures have different names, they must be treated as different types.
 
@@ -607,13 +607,126 @@ Note that simply marking =Complex= as copy does not involve implementing any fun
 
 After this implementation, we can remove =Clone= as copies shall be done automatically by the compiler.
 
-Rust does not support subtyping for structures, but it does support trait pre-requisites.  As such, if =Complex= did not implement =Clone= it would not be =Copy=.
+Rust does not support sub-typing for structures, but it does support trait pre-requisites.  As such, if =Complex= did not implement =Clone= it would not be =Copy=.
 
-This is not to say that each instance of pass-by-copy inserts or desugars to an insertion of =clone=.  If a value is marked as =Copy=, the cloning is done by replicating the bit-pattern and not recursively calling =clone=.
+This is not to say that each instance of pass-by-copy inserts or desugars to an insertion of =Clone::clone=.  If a value is marked as =Copy=, the cloning is done by replicating the bit-pattern and not recursively calling =clone=.
 
+** Polymorphism
+*** Trait-associated functions, turbofish
+
+We are now equipped to tackle the question of how Rust achieves polymorphism.  There are several mechanisms that work concurrently and all of them revolve around traits.
+
+Let us first start by noting that there can be only one free-standing function for any given name.   This extends to inherent implementations.  Though an inherent implementation can have the same name as a freestanding function:
+#+BEGIN_SRC rust
+  fn hello() {
+	  println!("hello")
+  }
+
+  impl Complex {
+	  pub fn hello() -> {
+		  println!("hello again")
+	  }
+  }
+#+END_SRC
+there can be only one inherent implementation with a given name.  A trait can also only be implemented once.
+
+Since both the trait-associated and inherent implementations share the call syntax, whenever there may be ambiguity Rust requires the programmer to disambiguate manually:
+#+BEGIN_SRC rust
+  let clone = Object::clone(&object); // inherent
+  let clone = <Object as Clone>::clone(&object); // associated to the `Clone` trait
+#+END_SRC
+the syntax =<Type as Trait>::method= is sometimes called the turbofish.
+
+A function associated to a trait can be called only if that trait is in scope.  The trait =Clone= is imported as part of the standard library =prelude=, but other traits must be imported manually before use.  If two traits have an associated function of the same name, each =.method= call must be rewritten as =<Type as Trait>::method= turbofish.  This is technically a form of static polymorphism, but not particularly interesting.
+
+*** Generics
+Rust supports generics via templates.  Like in C++ both structures and functions can be made generic.  What this means is that for each instance of a generic structure template, a new structure definition is created.  These structures are considered distinct types in all but generic functions.
+#+BEGIN_SRC rust
+  struct Complex<T: Copy + Default> {
+	  real: T,
+	  imaginary: T
+  }
+#+END_SRC
+In this example we specify that =Complex= is a generic structure parameterised by a single type =T=, that can only be a type that is both trivially =Copy=-able and =Default=-constructable.  We know that if =Complex<Sometype>= is a valid type, then =Sometype= must implement both traits.   In C++, this isn't always the case, and usage of C++ concepts is complicated enough that these cases are the minority.
+
+Methods for generic structures must also be generic.
+#+BEGIN_SRC rust
+  impl<T: Default + Copy> Complex<T> {
+	  pub fn new(real: T, imaginary: T) -> Self {
+		  Self { real, imaginary }
+	  }
+  }
+#+END_SRC
+Note that we must provide constraints which are at least the same or more constraining than the ones that we have provided in the structure definition.  So for example adding =T: Default + Copy + PartialEq= to the =impl= generic arguments, would entail that the generic functions defined in that block are only defined if =T= satisfies =PartialEq= in addition to the constraints imposed in the structure definition.
+
+#+BEGIN_SRC rust
+  impl<T: Default + Copy + PartialEq + Eq> Complex<T> {
+	  pub fn is_default(&self) -> bool {
+		  self.real == T::default() && self.imaginary == T::default()
+	  }
+  }
+#+END_SRC
+In this example, we rely on the fact that if a type =T= implements both =PartialEq= which defines the equality operation and =Eq= which states that for all valid values of =T= an equality comparison has all the usual properties, and always yields a boolean value, then we can ask of =Complex<T>= if it is the =default=.
+
+This example is for illustration purposes only; most new programmers in Rust will fall into a few common traps which we shall mention here, and fix later.
+
+Specifically, we assume that the implementation of =Complex<T>::default= is recursive and comprises the defaults of =real= and =imaginary=.  This is true assuming no other code exists, but may not be true in general.  In fact, assuming the code that we have presented as examples is the only code that there is, the concept of =Complex<T>::default= is not defined.  So we should provide an implementation for that:
+#+BEGIN_SRC rust
+  impl<T: Default + Copy> Default for Complex<T> {
+	  fn default() -> Self {
+		  Self {
+			  real: T::default(),
+			  imaginary: Default::default(), // Type T inferred, identical to above
+		  }
+	  }
+  }
+#+END_SRC
+This is called a /blanket implementation/, as it covers more than one type =T= in this set.  Blanket implementations are useful, but not as much as one might expect at first glance, because unfortunately, trait implementations that can overlap either now or hypothetically in the future, are both covered by 
+
+Here we must note that if we had omitted the =Default= trait bound in the definition of =Complex<T>= we would still have a sound set of functions.  It is only sensible to consider if =Complex<T>= is the default if said default is defined.  But due to the constraints inherent in Rust's trait system, we would not be able to define =is_default= as easily, so we have chosen to require that the =T= be =Default= for all valid =Complex<T>= types.  We shall see later how this could be done with more sophisticated =where= clauses.
+
+#+BEGIN_aside
+Because of the way that this system is set up, we can always know for certain where the function called in each particular case is defined.  One knows that a function can only be defined once, and never overloaded, so a regular expression search is all one needs to find where a particular function is defined.
+#+END_aside
 ** Ownership, and =Drop=
 
-Rust is a RAII language.  
+Rust is a RAII language.  This coupled with the borrow checking rules implies that one can safely de-allocate any structure as soon as it reaches the end of the scope in which it is defined.  But this is only true of simple structures, those that implement =copy= as some structures may need to perform complex housekeeping to safely stop existing.
+
+In Rust, the role of destructors is filled in with the =Drop= trait and the associated function =Drop::drop=, using its fully qualified name.  The function is called recursively for types that implement it, and for types that contain types that implement recursively.
+
+#+BEGIN_SRC rust
+  struct HasDrop;
+
+  impl Drop for HasDrop {
+	  fn drop(&mut self) {
+		  println!("Dropping HasDrop!");
+	  }
+  }
+
+  struct HasRecursiveDrop {
+	  one: HasDrop,
+  }
+
+  fn main() {
+	  let _x = HasRecursiveDrop { one: HasDrop };
+  }
+#+END_SRC
+
+In this example, even though technically there isn't an explicit implementation of =Drop= for =HasRecursiveDrop= the =<HasDrop as Drop>::drop= function shall be called and the =dropping HasDrop!= message shall be printed.
+
+This lends itself to the notion of ownership.  A field in a structure is owned by that structure.  The structure is responsible for both creating and de-allocating the field.
+
+This however means that each object must have precisely one owner.  And all objects that exist within the program must be traceable to a few objects created in =main.rs= either directly or indirectly.   Instead of having a class hierarchy, Rust opts to have an object hierarchy.
+
+In Rust, this allows one to effortlessly use types that manage resources externally.  This leads to some quirks, that should be noted.
+For example, if a value is returned from a function it must be bound to a variable, otherwise its destructor is called immediately.
+
+#+BEGIN_SRC rust
+  let _keep_alive = SomeStruct::long_running_task_handle();
+#+END_SRC
+in such circumstances it is common to see the following construct.  Also note the underscore in the =_keep_alive=; without it the static analyser will warn about =keep_alive= being unused.  So be cautious of naming your variables, including fields with underscores prefixed or postfixed.
+
+
 
 * Footnotes
 
