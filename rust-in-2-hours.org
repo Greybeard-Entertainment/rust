@@ -6,11 +6,270 @@ This is a high level overview document about the Rust programming language.  The
 
 I firmly believe that either a blind endorsement or misinformed dogmatic rejection of the language are both detrimental to society.  Despite my humble expertise in Rust, and a relatively good overview of programming languages, I believe that this document can be a valuable tool.  However, this is in no way an in-depth analysis, and I would recommend using this document as a start for one's own research using the provided resources.
 
-* Rust's paradigm
+* Overview
 Rust is a multi-paradigm programming language that supports procedural, object-oriented and functional programming as well as relatively niche paradigms such as actor-based programming.  However, it does not fit into either of those niches completely.  In conjunction with relatively good performance, a vibrant community and a reliance on the =libc= as the only runtime component, Rust can fill the niches previously occupied by C++, while its choice to support a limited form of compile-time user-specified code transformation/generation (via procedural macros) allow it to compete with Python and Go for backend development.
 
 Rust is a complex language.  Much of its complexity stemming from the rules imposed by the language designers, rather than the sheer number of features.  Procedural macros allow library developers to impose additional rules, which more often than not allows Rust to be explored by trial and error.  For someone well-versed in Haskell and C++, required reading to learn Rust can be reduced to none, as the process from installing =rustup= to running =cargo build= is self documenting.
 
 Rust is a language that plants itself firmly in the camp of pragmatic long feedback cycle development.  A proficient Rust engineer is able to skirt around and anticipate compilation errors, which given strict typing, strong soundness requirements and many issues particularly pertaining to incomplete and/or unimplemented features, is a lot harder than one would aniticipate.
 
-Rust programming is unlike programming in other systems programming languages, as it does not allow the programmer to defer confronting problems, and over-abstract to hide poor design decisions.  It is a language best suited for programming libraries, with a similarly robust toolkit for producing complete 
+Rust programming is unlike programming in other systems programming languages, as it does not allow the programmer to defer confronting problems, and over-abstract to hide poor design decisions.  It is a language best suited for programming libraries, with a similarly robust toolkit for producing complete applications either using the CLI or graphical toolkits.
+
+It is a language that is used in the vast majority of blockchain systems.  Among the features that make it a good choice are
+1) Borrow checking, which elides the need for garbage collection and  providing similar memory safety.
+2) A sane concurrent programming paradigm, making it easier to write both threaded and asynchronous multiprocessing applications.
+3) Strong static analysis tools, preventing implicit programming errors, such as over/under flow, unhandled error conditions, type mismatch etc.
+4) Robust coverage of LLVM targets.  It should be noted that due to the dependence on the platform-specific =libc=, the =zig= programming language has slightly better coverage.
+5) Rust is the preferred language for working with WASM both client and server-side.
+6) Strong FFI programming paradigm.  One does not have an implicit ABI, and one has thorough control over memory layout as well as potential pitfalls.
+7) Rust allows the user to specify additional compile-time constraints with thorough guidance via procedural macros.
+
+
+Rust is used for the implementation of some of the ledgers in the Ethereum protocol, and all of the Solana software stack.  It is used in Parity Substrate (Polkadot ecosystem), and with very few exceptions is the language of choice for writing one's own blockchain protocol.
+
+Finally, Rust is the first language since C to be used for the Linux kernel.  It was directly endorsed by the white house in lieu of traditional programming in "memory unsafe" languages such as C, C++, FORTRAN, Pascal, Ada, and many more.
+
+It is a flourishing ecosystem of libraries, packages and professionals.
+
+* Procedural Rust
+
+Rust has a pragmatic approach to procedural programming.  In most situations, one is encouraged to write the code in a procedural style, without over-abstraction.
+
+** Hello world
+To start things off, this is what a hello-world program would look like[fn:1].
+#+BEGIN_SRC rust
+  fn main() {
+	  println!("Hello world");
+  }
+#+END_SRC
+The =main= function is an OS entrypoint.  The Rust compiler abstracts the unix-specific aspects of the entrypoint: note the absence of arguments as input, the usage of the =println!= macro in lieu of the =libc= =printf= function, lack of return in either the signature of main, or implicit =return 0=.  For all intents and purposes, these abstractions are almost never a problem, and allow the programmer to live in a world of coherent abstractions.
+
+** Variables
+
+Like many similar languages, Rust supports a Von-Neumann model:  variables can be regarded as containers for values.
+
+Each container has exactly one type.  The following primitive numerical types are supported:
+
+| Type |
+|------|
+| u8   |
+| u16  |
+| u32  |
+| u64  |
+| u128 |
+#+CAPTION: Unsigned integer types
+
+| Type |
+|------|
+| i8   |
+| i16  |
+| i32  |
+| i64  |
+| i128 |
+#+CAPTION: Signed integer types
+
+Each container must be initialised to a value, before use, that is of the same type as the container.  Failure to do so is a compilation error, Rust can keenly track these situations, more on that later.  The following is a comprehensive example of possible variable declarations.
+#+BEGIN_SRC rust
+  let good_type: u64 = 0_u64;
+  let good_deferred_init;
+
+  let mut inferred_type = 0_usize;
+  let bad_value: u64 = -1_i32;	// bad: unsigned box, signed value
+  let bad_type: u64 = 0_usize;	// bad: usize is not the same as u64
+  good_deferred_init = 3;			// ok: type i32
+  let bad_init;					// bad: not initialised at all
+#+END_SRC
+
+All variables must be initialised once.  The programmer must opt into mutating the value afterwards.
+
+Each variable is confined to a scope, that is delimited by curly brace pairs.  A =let= expression can be used to shadow a variable within a particular scope, with a type that might be different.
+
+#+BEGIN_SRC rust
+  start = 0_i32;
+  // Illegal, need `let`
+  let start = 0_u8;
+  // legal init
+  let start = 0_i8;
+  // legal shadow
+  {
+	  let mut start = 0_u16;
+	  // legal shadow
+	  start += 1_u16;					// No ++ operator :(
+	  // legal, this `start` is mutable.
+  }
+  start -= 1_i8;
+  // Illegal.
+
+  let start: u128;
+  // All legal
+  start = 0_u64;
+  // illegal, because the type of `start` must be `u128`
+#+END_SRC
+
+
+
+** Expressions, Control flow
+
+Rust is an expression-based language.  An expression is composed of literals, variables, function calls, and operators[fn:2].  Variables are evaluated eagerly.  There are two distinct types, ones which indicate a location, (called place expressions) and the rest are value expressions.
+
+All expressions produce a value, some expressions have an effect on the surrounding code.  A literal is an expression that only produces a value.  An assignment, by contrast produces both a value, and an effect, and arguably the effect is more important. All values produced by expressions can be assigned to a variable.
+
+A block: region delimited by curly braces, is also an expression:
+#+BEGIN_SRC rust
+  let block = {
+	  let answer = 22;
+	  let question = 20;
+	  question;
+	  answer + question
+  };
+  // block == 42
+  #+END_SRC
+Note the absence of the semicolon in the line containing the expression =answer+question=, but the presence of a semicolon after the initialisation.  If the semicolon were added, this would still be valid Rust, but the value (and type) of block would be =()= known as =unit=.  This special type is what most expressions in Rust evaluate to, even though you as a programmer are unlikely to write it explicitly.
+
+Rust supports many of the usual ALGOL-heritage control constructs.  This includes =if/else=, =while=, =for=.  In Rust, these constructs are also expressions, meaning that they produce a value.
+
+The boolean conditional =if= works by evaluating the expression that follows the keyword, and then evaluating the contents of the following curly braces.  For example:
+
+  #+BEGIN_SRC rust
+	let value_of_if = if true { false; }
+	// value_of_if == ()
+#+END_SRC
+An =if= is allowed to evaluate to the trivial type =()=.  Any other value with only one =if= would lead to inconsistency in the type of the =value_of_if= variable.
+
+If the =if= has an =else= block, however, the value is allowed to be of any other type, provided both the types of the =if= and =else= are the same:
+#+BEGIN_SRC rust
+let answer: i32 = if question_about_meaning_of_life { 42 } else { -1 }
+#+END_SRC
+
+For obvious reasons, the =while= loop operates much like the lone =if= expression, evaluating to =()=.
+
+The =for= loop operates more similarly to Python or PASCAL, in that it provides a bound value that is taken from a particular collection.  The precise mechanism for this we shall cover in a later chapter.  Similarly to =while= and despite there being a natural[fn:3] value to which the =for= expression could evaluate, it too evaluates to =()=.
+
+These loops interact in the usual way with the =break= and =continue= keywords.  They typically either exit or skip the execution of statements in the first enclosing loop.  If there is more than one loop, the programmers disambiguate by assigning labels.
+
+#+BEGIN_SRC rust
+  'outer: for i in 1..=5 {
+	  for j in 1..=200 {
+		  if j > 4 {
+			  break;
+			  // equivalent to `continue 'outer;`
+		  }
+		  if i >= 2 {
+			  break 'outer;
+		  }
+	  }
+  }
+#+END_SRC
+One keyword that differentiates Rust from other programming languages is the =loop= keyword.  It is an endless loop, that must be exited with the =break= keyword, or not at all (/e.g./ in event loops, REPL /etc./).  This is also the reason for differentiating loop labels with single quote marks (/e.g./ ='outer= instead of =outer=); because =loop= expressions are allowed to evaluate to non-trivial values.  In this case =break= can be used as a regular =return= statement in a function[fn:4].
+
+#+BEGIN_SRC rust
+let (mut a, mut b) = (1, 1);
+let result = loop {
+	if b > 10 {
+		break b;
+	}
+	let c = a + b;
+	a = b;
+	b = c;
+};
+#+END_SRC
+
+
+#+BEGIN_ASIDE
+This convention might seem problematic at first; indeed this was one of the main criticisms of Pascal.  However, this convention allows shorter code, that is also more explicit about the dependency chains.
+
+It is a common situation where a lot of values must be constructed, so that then a few other dependent values are initialised.  This code if written out linearly is difficult to read, as it is a dry sequence of definitions and assignments.  However, if the base values are only needed to construct the dependent values, one can group those into anonymous blocks.
+
+This can be extended to situations wherein state is being modified as well.  Imposing a scope and shadowing temporarily mutable values, allows one to know which values are yet to be mutated, and which are immutable.
+
+This approach is reminiscent of [[http://number-none.com/blow/blog/programming/2014/09/26/carmack-on-inlined-code.html][style C of John Carmack]], but with crucial improvements.  Namely, the local variables are localised, the variables whose state is used more than once are naturally declared at the outer scope, giving one a structural insight into the code organisation.  The comments are optional, and the function of a code fragment can be gleaned from the value that is being constructed.  As such, it provides the sequential narrative of inline declarations, as well as the readability improvements associated to grouping logically connected operations.
+#+END_ASIDE
+
+** Arrays, borrows, slices
+
+Rust supports contiguous homogeneously typed collections at the language level.  The following is an example of an array of bytes, that is the ASCII string for "hello world".
+#+BEGIN_SRC rust
+let array: [u8; _] = b"hello world";
+#+END_SRC
+In this example, we could have omitted the type signature, as it would be inferred.  We chose to specify the type of each element: =u8=, but not to specify the number of elements.  We have also chosen to use the array literal syntax for ASCII strings.  Including any UTF-8 non-ASCII characters would result in a compilation error.
+
+Like in PASCAL, arrays of different lengths are considered different types.
+#+BEGIN_SRC rust
+  let array: [u8; 3] = b"hello world"; // Type error; length
+  let array: [char; 3] = ['a', 'b', 'c']; // OK
+  let array: [char; 4] = "abcd";			// OK
+  let array: [u8; 4] = "abcd";			// Type error; char is not u8
+  let array: [char, 4] = b"abcd";			// Type error; u8 is not the same type as char
+#+END_SRC
+It should also be noted, that =char= is a distinct type from =u8=, and that Rust strings (more on them later), are not arrays of either =char= or =u8=.  Consequently, the problems that plagued PASCAL do not affect Rust, for reasons that shall become clear shortly.
+
+Rust does not support C/C++ style references and pointers.  For historical reasons Rust follows the convention of those languages for its closest analogues to those concepts, however, the semantics attached to those analogues are very different.
+
+While variables typically have a memory address, unlike most procedural languages, Rust enforces that these memory addresses be taken only while the variables are in scope.  So for example the following code shall fail to compile:
+
+#+BEGIN_SRC rust
+  let reference: &i32;
+
+  {
+	  let temp = 0;
+	  reference = &temp;
+  }
+
+  *reference = 42
+  // UB: temp must be `free`d by now.
+#+END_SRC
+
+All addresses in Rust can be safely considered to be valid, unless a subsystem of the Rust compiler, known as the borrow checker, states that a variable, in this case =temp= doesn't live long-enough[fn:5].
+
+For reasons that shall become apparent later, Rust refers to these addresses as borrows, to delineate that unlike in C, where taking a reference is a simple operation, in Rust, the same operation has more implications.  The inverse operation to a =borrow= is a =dereference= and it largely follows the same conventions as C.
+
+Unlike C, a variable in Rust is only mutable if explicitly marked as mutable.  An even stricter requirement is imposed on references that are allowed to mutate the borrowed value, known as mutable borrows.  To mutate elements of an array, both the array itself as well as the borrow of said array must be marked explicitly as mutable.  For example:
+#+BEGIN_SRC rust
+  let mut vec: [u8; 3] = [1, 2, 3];
+
+  for i in &mut vec {
+	  *i += 50;
+  }
+
+  // vec = [51, 52, 53]
+#+END_SRC
+
+The borrow checker statically verifies that there is no converting an immutable reference to a mutable one, similar to casting away =const= in C.  Any attempt to take another mutable or immutable[fn:7] reference to the same array =vec= (for example inside the =for= loop)  would also be a compilation error, as only one mutable borrow is allowed at a time.
+
+#+BEGIN_ASIDE
+The borrow checker algorithm is not perfect; whenever it sees code that *could* be borrowing the same variable's address mutably twice, it will reject that code.
+
+For situations where that would lead to great inefficiencies, users are to use =unsafe=, however, it is highly recommended to avoid =unsafe=, unless one has exhausted all other possibilities.
+#+END_ASIDE
+
+
+
+
+** Functions
+
+Rust calls procedures functions, without differentiating side-effect-free functions from procedures.  Out-parameters, are generally accepted, but not common.  Function signatures as well as argument type declarations are right-associative.
+
+#+BEGIN_SRC rust
+  fn function(arg1: u32, arg2: i32, arg3: u128) -> u128 {
+	  arg3
+  }
+#+END_SRC
+Functions are considered to evaluate to the value to which the body block evaluates to.  In this example the body is equivalent to =return arg3=.
+
+
+
+* Footnotes
+
+[fn:7] A point that is somewhat frustrating to new users is that taking a mutable borrow invalidates any immutable borrows.
+
+[fn:6] We shall see later, why the mutability nomenclature is somewhat misleading.
+
+[fn:5] This situation is a newbie mistake when using the Rust =getopt= library.
+
+[fn:4] The parallel to =return= is also in that a =break= without a value is assumed to "return" =()=.
+
+[fn:3] The collection over which iteration takes place.
+
+[fn:2] A full list is [[https://doc.rust-lang.org/reference/expressions.html][available here]].
+
+[fn:1] One is generated via =cargo new=.
