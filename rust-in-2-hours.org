@@ -510,6 +510,17 @@ Inherent implementations can be used to create getter and setter methods for pri
 	  }
   }
 #+END_SRC
+At which point they can be used as follows:
+#+BEGIN_SRC rust
+  let real = 2d_vec.get_x();
+  2d_vec.set_x(real*2.0);
+#+END_SRC
+Notice that the first argument in the implementation does not have a type signature.  It is also used in the prefix notation, but that is no more than syntactic sugar.
+#+BEGIN_SRC rust
+  let real  = 2dVec::get_x(2d_vec);
+  2dVec::set_x(&mut 2d_vec, real*2.0);
+#+END_SRC
+is what the previous syntax implies really.
 
 It should be noted that getters and setters are extremely rare in Rust code bases.  The reason for this is the semantics of accepting a structure as a function argument.
 
@@ -560,11 +571,49 @@ despite the fact that the value =number= was passed as mutable, the memory locat
   let complex3 = invert(complex1);
   // Error: complex1 is freed after the first call to `invert`
 #+END_SRC
-To help in this situation the trait =Clone= creates copies of objects to be used in functions that accept 
+To help in this situation the trait =Clone= creates copies of objects to be used in functions that accept structures by move.
 
+Specifically, we can implement clone in the following way
+#+BEGIN_SRC rust
+  impl Clone for Complex {
+	  fn clone(&self) -> Self {
+		  Self {
+			  real: self.real,
+			  imaginary: self.imaginary
+		  }
+	  }
+  }
+#+END_SRC
+At which point we can modify the previous example:
+#+BEGIN_SRC rust
+  let complex1 = Complex::default();
+  let complex2 = invert(complex1.clone());
+  // &complex1 != &complex2, but complex1 is still valid
+  let complex3 = invert(complex1.clone());
+  // OK.
+  let complex4 = invert(complex1);
+  // Also fine.
+#+END_SRC
 
+So the C++ rule of three in Rust can be reduced to the creation of a factory method and implementing =Default= and =Clone=.
 
+It must be noted, that the function call overheads when calling either the constructor function or the trait-associated function =clone=, is not always guaranteed to be optimised away.  Most =clone= implementations are recursive, and oftentimes, complex.  However, there are situations in which the bit representation of an object is the value of the object, and there is no difference between a shallow and deep copy.  Indeed our =Complex= type is just two =f64= numbers, which if copied with =memcpy= would still be a valid and /distinct/ value, which can be freed independently of the original.
 
+To explain this to the compiler, we implement the =Copy= trait like so:
+#+BEGIN_SRC rust
+impl Copy for Complex {}
+#+END_SRC
+Note that simply marking =Complex= as copy does not involve implementing any function.
+
+After this implementation, we can remove =Clone= as copies shall be done automatically by the compiler.
+
+Rust does not support subtyping for structures, but it does support trait pre-requisites.  As such, if =Complex= did not implement =Clone= it would not be =Copy=.
+
+This is not to say that each instance of pass-by-copy inserts or desugars to an insertion of =clone=.  If a value is marked as =Copy=, the cloning is done by replicating the bit-pattern and not recursively calling =clone=.
+
+** Ownership, and =Drop=
+
+Rust is a RAII language.  
 
 * Footnotes
 
