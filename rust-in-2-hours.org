@@ -379,7 +379,7 @@ The =use= keyword allows shorthand import of multiple constructs, with short-han
 
 #+BEGIN_SRC rust
   use file_module::submod::{fun1, fun2, self}
-  // Allows referring to `submod::` directly 
+  // Allows referring to `submod::` directly
 
   mod file_module;
   // The mod declaration can come after the imports
@@ -437,15 +437,141 @@ As such, Rust should not be regarded as either exclusively or primarily procedur
 
 * Object Oriented Programming in Rust
 
-Rust is a pragmatic OOP language.  It is as conceptually distant from a class-based OOP language (/e.g./ Java, C++) as it is from the Smalltalk family.  Rust has deliberately eschewed language features that serve to enable programmers to over-abstract and include too many indirections.  It has effective tooling for both dynamic and static polymorphism, strong encapsulation guarantees, and is the first language to explicitly codify the objects' lifetimes.
+Rust is a pragmatic OOP language.  It is as conceptually distant from a class-based OOP language (/e.g./ Java, C++) as it is from the Smalltalk family.  Rust has deliberately eschewed language features that serve to enable programmers to over-abstract and include too many indirections.  It has effective tooling for static and dynamic polymorphism.  Rust is also quite good at tracking objects properties, namely lifetimes.
+
+It would be wise to think of Rust as an OOP language primarily, even though it is neither officially considered one by its creators, nor does it contain the typical feature set associated with OOP languages.
+
+** Structs
+
+Rust occupies a middle ground between traditional procedural POD sturctures and simula-style class-based structures.  For example:
+#+BEGIN_SRC rust
+  pub struct Complex {
+	  pub real: f64,
+	  pub imaginary: f64
+  }
+#+END_SRC
+is a structure in Rust.  For example, here's how we construct an instance of this type,
+#+BEGIN_SRC rust
+  let number_two = Complex {
+	  real: 2.0,
+	  imaginary: 0.0
+  }
+#+END_SRC
+in case there is a local variable with a suitable type, the colon can be omitted:
+#+BEGIN_SRC rust
+  let real = 2.0;
+  let imaginary = 0.0;
+  let number_two = Complex { real, imaginary };
+#+END_SRC
+
+Note that naming structures in Pascal case is strongly encouraged.  Failure to do so produces a compilation warning.  
+
+Structures don't have a well-defined layout.  This implies that most Rust code links statically[fn:13], and intrinsically means that if two structures have different names, they must be treated as different types.
+
+Specifically, in Rust there is no subtyping.  Each variable has precisely one type.  It doesn't matter if two structures have the same layout, they can neither be implicitly converted nor cast into each other.
+
+Instead the conversion can be done explicitly
+#+BEGIN_SRC rust
+  pub struct 2dVec {
+	  x: f64,
+	  y: f64
+  }
+
+  let v = Complex { real: 2.0, imaginary: 3.0 };
+  let v = 2dVec { x: v.real, y: v.imaginary }; // x and y are private
+#+END_SRC
+and in later chapters we shall see a more elegant way of performing the conversions.
+
+Each structure has visibility modifiers, that act sensibly.  Public members are visible anywhere the structure is visible, =pub(crate)= and =pub(super)= allow access in the same library and the enclosing module respectively, and by default all fields are private.
+
+Rust supports associating methods and functions to types, called inherent implementations:
+#+BEGIN_SRC rust
+  impl 2dVec {
+	  pub fn new(x: f64, y: f64) -> Self {
+		  Self {
+			  x, y
+		  }
+	  }
+  }
+#+END_SRC
+Note that when defining the associated factory function =new= we have used the shorthand =Self= for the name of the type.  This is to allow efficient renaming of structure.  We have also used the fact that the arguments of the function have the correct types and names to use the short-hand notation when constructing =Self=.
+
+If a structure has even one field that is not public, it cannot be constructed with a constructor, and the factory method if visible is the only way to construct a new instance.  This also means that the fields cannot be read or written to if private.  The type, however, can be visible, but opaque.
+
+Inherent implementations can be used to create getter and setter methods for private fields:
+#+BEGIN_SRC rust
+  impl 2dVec {
+	  pub fn get_x(&self) -> f64 {
+		  self.x
+	  }
+
+	  pub fn set_x(&mut self, other: f64) {
+		  self.x = other;
+	  }
+  }
+#+END_SRC
+
+It should be noted that getters and setters are extremely rare in Rust code bases.  The reason for this is the semantics of accepting a structure as a function argument.
+
+The inherent implementations must be defined in the same translation unit (crate, but not necessarily the same module), as the structure.  It is illegal to define inherent implementations for structures defined in other libraries/crates.
+
+** Traits
+
+Rust took inspiration from Haskell in implementing a typeclass-like mechanism for polymorphism.  Instead of imposing a type hierarchy, Rust exposes a mechanism for defining an interface.  By default a new =struct= does not participate in any interface, and each structure's participation is a conscious decision made by the programmer.
+
+Consider for a moment an interface that is not explicitly representable in C++ (until around C++ 20); namely that a type can be default constructed.  In Rust to specify that a type can be constructed with no input, one has to /implement/ the =Default= trait.
+
+For a structure that we have defined: =Complex=, we can do so with the following construct:
+#+BEGIN_SRC rust
+  impl Default for Complex {
+	  fn default() -> Self {
+		  Self {
+			  real: 0f64,
+			  imaginary: Default::default()
+			  // recursively call the default constructor for
+			  // f64, which evaluates to 0.0
+		  }
+	  }
+  }
+#+END_SRC
+To recap, we demonstrate that the type =Complex= participates in the =Default= interface.  We do so by implementing the unimplemented functions, and specifying any unspecified associated constants and types.
+
+Anything that is true of an inherent implementation is true of a specific trait implementation.  So for example, we could implement =Default= for =2dVec= and use the constructor directly, without having to specify =pub(super)= setters.
+
+Traits can be implemented either in the same crate as the structure, or the same crate as the trait.  So for example, if a foreign type, /e.g./  =std::vec::Vec=, does not already implement =Default= it is illegal to implement it.  This is known as the /orphan rule/.
+
+** Pass by move
+
+Rust is neither pass-by-copy (like C++) nor pass-by-reference (like Java).  Instead, all values are assumed to be passed by move.  Specifically for a function with the signature
+
+#+BEGIN_SRC rust
+  fn invert(mut number: Complex) -> Complex {
+	  number.x = -number.x;
+	  number.y = -number.y;
+	  number
+  }
+#+END_SRC
+
+despite the fact that the value =number= was passed as mutable, the memory locations associated to =complex1= and =complex2= aren't necessarily correlated:
+#+BEGIN_SRC rust
+  let complex1 = Complex::default();
+  let complex2 = invert(complex1);
+  // &complex1 != &complex2
+  let complex3 = invert(complex1);
+  // Error: complex1 is freed after the first call to `invert`
+#+END_SRC
+To help in this situation the trait =Clone= creates copies of objects to be used in functions that accept 
+
 
 
 
 
 * Footnotes
-[fn:12] This is most useful in using =enums= which we shall talk about later. 
 
-[fn:11] Which we have not covered in this section, as they do not work as strings in procedural languages. 
+[fn:13] Although historically dynamic linkage was preferred.
+[fn:12] This is most useful in using =enums= which we shall talk about later.
+
+[fn:11] Which we have not covered in this section, as they do not work as strings in procedural languages.
 [fn:10] As in =super::super= is not the parent of the parent.
 
 [fn:9] That module is almost always a file =lib.rs= in the =src/= subdirectory of the project.
