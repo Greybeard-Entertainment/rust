@@ -1591,7 +1591,7 @@ Unfortunately what one most commonly sees is a top-level enumeration that basica
   impl From<std::io::Error> for Error {
 	  //...
   }
-  
+
   pub fn init(self) -> Result<Self, Error> {
 	  libnetworking::connect_host(self.primary_source)?;
 	  libnetworking::connect_host(self.secondary_source)?;
@@ -1599,11 +1599,63 @@ Unfortunately what one most commonly sees is a top-level enumeration that basica
 	  libnetworking::connect_host(self.primary_source)?;
   }
 #+END_SRC
-Sure the second code is far shorter, but if handed off to someone who is not a Rust programmer, it is quite possible for them to think that something is wrong with their operating system, because the error message in the poorly considered =std::io::Error= doesn't clarify that =Os Error= means an /Error/ returned *by* the operating system, not *of* the operating system.  The information about which of the socket speicifications was wrong, is also lost.
+Sure the second code is far shorter, but if handed off to someone who is not a Rust programmer, it is quite possible for them to think that something is wrong with their operating system, because the error message in the poorly considered =std::io::Error= doesn't clarify that =Os Error= means an /Error/ returned *by* the operating system, not *of* the operating system.  The information about which of the socket speicifications was wrong causing the error, is also lost.
 
-** Action items
-*** TODO Mention pointers and unsafe
-*** TODO Mention array index notation in the /procedural/ chapter
+As a middle ground, it is often said that the =anyhow= or =eyre= libraries can compensate for the lack of context:
+#+BEGIN_SRC rust
+  use eyre::WrapErr;				// Import trait so method is usable
+
+  pub fn init(self) -> eyre::Result<Self> {
+	  libnetworking::connect_host(self.primary_source).wrap_err()
+		  .wrap_err("Failed to connect to primary source")?;
+	  libnetworking::connect_host(self.secondary_source)
+		  .wrap_err("Failed to connect to secondary source")?;
+	  libnetworking::connect_host(self.primary_destination)
+		  .wrap_err("Failed to connect to primary destination")?;
+	  libnetworking::connect_host(self.primary_source)?
+		  .wrap_err("Did you notice that the shorter version also had the primary source twice?")
+		  .wrap_err("Failed to connect to primary source again")
+  }
+#+END_SRC
+
+However, these errors can no longer be handled in any way other than printing.  More importantly, the description of *what* went wrong is inlined into the function, meaning that while each =eyre::Result= is potentially wrapping different errors, the user is not notified of situations in which they can reasonably handle those.  Simply returning an =eyre::Result= can mask potentially different error conditions and the programmer knows nothing other than certain operations are fallible.
+
+This is a problematic situation.  And not entirely within the best practices of functional programming.
+
+** Function taxonomy
+
+Rust is a rather peculiar language as regards functions.  To any functional programmer, calling any of the aforementioned entities functions is an abhorrent misnomer.  Most functions are not pure.  In fact, despite functions not allowing mutation as easily as most imperative languages, for anything but the =Copy= types, every function has an inherent side effect of invalidating the object in the enclosing scope.  This is especially problematic in anonymous functions (or more accurately procedures) as they can capture enclosing objects both by borrow and by =move=[fn:22].
+
+This results in the programmer necessarily having to engage with function taxonomy.  If not to know how to accept a function, but to be able to decode the error message any programmer must know the difference between =Fn=, =FnOnce= and =FnMut=.
+
+#+BEGIN_aside
+This is in stark contrast with functional languages, such as Haskell.  One might be asking why this was included in the functional description of Rust and the answer is two-fold.
+
+For one, assuming that Rust is a functional language is a common misconception.  We want to explain how Rust is not a functional programming language.
+
+The second and perhaps the more important reason is that while Rust is most assuredly not an FP language, it has intentionally replicated some of the patterns common to the functional style.
+
+As a consequence, a functional programmer can feel more comfortable in Rust than in a traditional imperative or OOP language, because some of the higher-level design patterns are replicated.  To ease that transition we must cover the important differences that a typical functional programmer might see as quaint, or problematic.
+
+As such we must cover the various ways in which functions are categorised in Rust.
+#+END_aside
+
+*** Repeat invocations
+
+Paradoxically the most common type of "function" is =FnOnce=.  It is automatically implemented for functions that accept one argument of any of the non-copy types by value.
+
+One might wonder why a function like that is inherently callable once only: indeed, we could call such a function in a loop if we simply =Clone= a value into the function invocation during each iteration.  Unfortunately, this is one of the many situations in which the inherent Von-Neumann-ness Rust rears its ugly head.  This is because the binding of a name to a function parameter is something that is ambiguous in this particular context, which it wouldn't be if one were in the Church formalism.  A value is a value in lambda calculus.  A Rust object is something that has a lifetime that must be respected.
+
+*** Mutability
+
+Suppose we got rid of accepting values by move, and only passed objects by borrow.  In any imperative programming language, whether or not we mutate any of the input parameters is irrelevant.  In a functional programming language, this fact is carried through via either the =Ref= or =Io= monads.  Rust is more principled than C: values can either be shared or mutable, so we need to differentiate functions that mutate their values.  But because we don't have the typical linear type system, as such we cannot extract the mutability into the output(s) of the function.  So the function itself is decorated as =FnMut=.
+
+
+
+* Action items
+** TODO Mention pointers and unsafe
+** TODO Mention array index notation in the /procedural/ chapter
+
 * Appendix
 
 ** Worked example: custom traits
@@ -1644,6 +1696,7 @@ Firstly, consider how a complex number is defined in abstract mathematical terms
 
 
 * Footnotes
+[fn:22] If requested with the =move= keyword.
 
 [fn:21] and also that anonymous functions are permitted to capture objects from the enclosing scope.  This shall become important in later chapters.
 [fn:20] This is particularly useful, because the point-free notation in Rust doesn't allow access to specific fields.
