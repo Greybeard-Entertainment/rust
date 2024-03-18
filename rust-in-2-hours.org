@@ -1356,7 +1356,7 @@ which will implicitly decay to =None= whenever the opposite takes place.  The ea
 
 Because Rust is not a functional language, the typical patterns which would allow one to replicate the full logic of the tower of doom are much harder to express, and so the monadic style is supplemented by the =?= operator.
 
-The statement 
+The statement
 #+BEGIN_SRC rust
   let config_file = open(path)?;
 #+END_SRC
@@ -1528,9 +1528,78 @@ In other languages this would be difficult to express, either because they don't
 
 In Rust, there is a great deal of decision making that is about delegating responsibility.  The =?= operator is a clean way of delegating failure in the current scope, to the enclosing scope.  With Options, that happens trivially, only the type =T= is important.  With =Result= the =?= operator also handles conversions, if the error type in the enclosing scope can be constructed from the current error.  This is often the case if the current error is a variant in the enclosing scope's error =enum=.
 
-Specifically it is commmon to see a pattern in which a library defines an overall =enum= for all conceivable errors as variants.  Sometimes, if there are too many variants, the patterns are split into trees.  Within those trees each leaf is its own type, asny branch is an =enum= that contains a =From<LeafType>= implementation for each such leaf.  All of these additionally implement =std::error::Error= which is the standard library error trait, which additionally requires the Error types to implement =core::fmt::Debug= and =core::fmt::Display=.  
+Specifically it is commmon to see a pattern in which a library defines an overall =enum= for all conceivable errors as variants.  Sometimes, if there are too many variants, the patterns are split into trees.  Within those trees each leaf is its own type, asny branch is an =enum= that contains a =From<LeafType>= implementation for each such leaf.  All of these additionally implement =std::error::Error= which is the standard library error trait, which additionally requires the Error types to implement =core::fmt::Debug= and =core::fmt::Display=.  As a consequence, all functions that return =Result= often return the same error type, thus becoming true monads.  The leaf errors can be converted implicitly by =?=.
 
+This style suits libraries best, some better than others.  No information is lost, an accurate picture of a cascade of failures can always be recovered at the top level.  Dependent libraries must obviously wrap their dependencies' error =enum=-s, as if they were leaf types.  However this pattern often results in poor interoperability with user-facing code, and works poorly in libraries such as =serde= where errors must be wrapped in a concrete library-provided type, which invariably destroys information.
 
+This pattern also leaves no room for reframing the context and results in poor signal-to-noise ratios.  Consider this situation.  A single service may need multiple socket connections: particularly if said service is a message relayer.  Failure to connect to each and every one of those services is distinct, and often the only possible error to be returned.  As such, it is often prudent to consider the following construction:
+#+BEGIN_SRC rust
+  pub enum Error {
+	  PrimarySource(SocketConnectError),
+	  PrimaryDestination(SocketConnectError),
+	  SecondarySource(SocketConnectError),
+	  SecondaryDestination(SocketConnectError),
+	  Database(Either<SocketConnectError, DatabaseError>),
+	  // .. other types
+  }
+
+  pub enum SocketConnectError {
+	  PortInUse{
+		  port_number: u16,
+	  },
+	  Permissions {
+		  port_number: u16,
+		  user: UserAccount,
+	  },
+	  NonLocalHost {
+		  host: String,
+		  port_number: u16
+	  },
+	  // etc.
+  }
+#+END_SRC
+
+The top-level error enumerates all conditions which are errors.  For a specific type of failure, we create a separate enumeration.  To reframe an error, we can specify an implementation of =TryFrom<std::io::Error>= which maps the underlying, rather problematic error type, to a regular "nice" local error type.  The crucial aspect is that this =SocketConnectError= can assume things about the context that the general implementation in the standard library cannot.
+
+Specifically, as a program developer we know that the inability to bind to a specific port can mean that either something else is using it, in which case we can use the standard Unix toolkit to find that program and tell the user to kill it.  We can reframe the typical error message =OS Error 11: Connection refused= to something that is far less confusing: =failed to bind to port 8080, because that port is already in use=.  We can do so by implementing =core::fmt::Display= for =SocketConnectError=.  Additionally we can tell which part caused the error, because the error can be =match=-ed on, and additional context, /e.g./  where that string was set can be added.
+
+In practice Rust permits extremely well-designed applications, even following this simple tree-like pattern.
+
+Unfortunately what one most commonly sees is a top-level enumeration that basically categorises the errors by type; this certainly makes the invoking code simpler: starting from
+#+BEGIN_SRC rust
+  pub fn init(self) -> Result<Self, Error> {
+	  libnetworking::connect_host(self.primary_source)
+		  .map_err(TryInto::try_into)?
+		  .map_err(Error::PrimarySource)?;
+	  libnetworking::connect_host(self.secondary_source)
+		  .map_err(TryInto::try_into)?
+		  .map_err(Error::SecondarySource)?;
+	  libnetworking::connect_host(self.primary_destination)
+		  .map_err(TryInto::try_into)?
+		  .map_err(Error::PrimaryDestination)?;
+	  libnetworking::connect_host(self.secondary_destination)
+		  .map_err(TryInto::try_into)?
+		  .map_err(Error::SecondaryDestination)?;
+  }
+#+END_SRC
+
+#+BEGIN_SRC rust
+  pub enum Error {
+	  Io(std::io::Error)
+  }
+
+  impl From<std::io::Error> for Error {
+	  //...
+  }
+  
+  pub fn init(self) -> Result<Self, Error> {
+	  libnetworking::connect_host(self.primary_source)?;
+	  libnetworking::connect_host(self.secondary_source)?;
+	  libnetworking::connect_host(self.primary_destination)?;
+	  libnetworking::connect_host(self.primary_source)?;
+  }
+#+END_SRC
+Sure the second code is far shorter, but if handed off to someone who is not a Rust programmer, it is quite possible for them to think that something is wrong with their operating system, because the error message in the poorly considered =std::io::Error= doesn't clarify that =Os Error= means an /Error/ returned *by* the operating system, not *of* the operating system.  The information about which of the socket speicifications was wrong, is also lost.
 
 ** Action items
 *** TODO Mention pointers and unsafe
