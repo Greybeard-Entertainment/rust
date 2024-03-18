@@ -435,14 +435,13 @@ The experience of writing purely procedural Rust is akin to programming in PASCA
 
 As such, Rust should not be regarded as either exclusively or primarily procedural.
 
-* Object Oriented Programming in Rust
+* Object Oriented Rust
 
 Rust is a pragmatic OOP language.  It is as conceptually distant from a class-based OOP language (/e.g./ Java, C++) as it is from the Smalltalk family.  Rust has deliberately eschewed language features that serve to enable programmers to over-abstract and include too many indirections.  It has effective tooling for static and dynamic polymorphism.  Rust is also quite good at tracking objects properties, namely lifetimes.
 
 It would be wise to think of Rust as an OOP language primarily, even though it is neither officially considered one by its creators, nor does it contain the typical feature set associated with OOP languages.
 
-** Structs
-
+** Objects and Structs
 Rust occupies a middle ground between traditional procedural POD sturctures and simula-style class-based structures.  For example:
 #+BEGIN_SRC rust
   pub struct Complex {
@@ -526,8 +525,7 @@ It should be noted that getters and setters are extremely rare in Rust code base
 
 The inherent implementations must be defined in the same translation unit (crate, but not necessarily the same module), as the structure.  It is illegal to define inherent implementations for structures defined in other libraries/crates.
 
-** Traits
-
+** Message passing as Traits
 Rust took inspiration from Haskell in implementing a typeclass-like mechanism for polymorphism.  Instead of imposing a type hierarchy, Rust exposes a mechanism for defining an interface.  By default a new =struct= does not participate in any interface, and each structure's participation is a conscious decision made by the programmer.
 
 Consider for a moment an interface that is not explicitly representable in C++ (until around C++ 20); namely that a type can be default constructed.  In Rust to specify that a type can be constructed with no input, one has to /implement/ the =Default= trait.
@@ -552,7 +550,6 @@ Anything that is true of an inherent implementation is true of a specific trait 
 Traits can be implemented either in the same crate as the structure, or the same crate as the trait.  So for example, if a foreign type, /e.g./  =std::vec::Vec=, does not already implement =Default= it is illegal to implement it.  This is known as the /orphan rule/.
 
 ** Pass by move
-
 Rust is neither pass-by-copy (like C++) nor pass-by-reference (like Java).  Instead, all values are assumed to be passed by move.  Specifically for a function with the signature
 
 #+BEGIN_SRC rust
@@ -877,7 +874,7 @@ One example of inconvenience imposed by type erasure is the =std::io::Error= typ
 #+END_aside
 
 ** Encapsulation
-
+*** Invariance at construction
 Rust provides a robust set of interlocking features that make it an excellent language to write encapsulated code.
 
 We have noted earlier that it is exceedingly rare to see =getters= and =setters= in Rust, and even then more often than not, as a result of needing to manipulate Rust objects from a different programming language via a Foreign function interface (FFI).
@@ -897,16 +894,650 @@ This permits a pipeline style that was popularised in Java with the introduction
 
 Unfortunately, there are situations in which shared data indeed needs to be mutated.  For example the database in a server must be mutable and able to respond to requests handled by, potentially, different threads.
 
+*** Type state
+Additionally, thanks to strict typing, lack of subtyping, and a low overhead to establishing throwaway datatypes, Rust encourages programmers to utilise the type-state pattern.
+
+The idea is simple, each state of the system is encoded as a type.  For example, if one needs to establish a handshake process with a web-based service, and this involves reaching a server, obtaining a =session_cookie=, sending one's =public_key= verifying the server's signed message, the type state representation of that process would look like this
+#+BEGIN_SRC rust
+  pub struct Start {
+	  public_key: PublicKey,
+	  server_address: ServerUrl,
+  }
+
+  struct ServerReached {
+	  public_key: PublicKey,
+  }
+
+  struct ServerReplied {
+	  public_key: PublicKey,
+	  session_cookie: SessionCookie,
+  }
+
+  struct PublicKeySent {
+	  public_key: SentPublicKey,
+	  session_cookie: SessionCookie,
+  }
+
+  struct ServerSentSignedMessage {
+	  public_key: SentPublicKey,
+	  message: ServerMessage,
+	  session_cookie: SessionCookie,
+  }
+
+  pub struct ServerMessageWasCorrect {
+	  public_key: SentPublicKey,
+	  message: VerifiedServerMessage,
+	  session_cooki: SessionCookie
+  }
+#+END_SRC
+
+with all the state transitions codified either as freestanding functions, or inherent implementations, the advantage of this approach is that illegal state is unrepresentable, and only specific state transitions are allowed.  One controls the state transitions and one can guarantee that the intermediate states do not leak through the program.  Such a type-state module is largely a self-explanatory process diagram, that happens to do the right operations in the right order to reach the server in question.
+
+*** Interior mutability
+
 In Rust, immutable borrows aren't really immutable, but encapsulated.  By that I mean that =RefCell=, =Mutex=, =RwLock=,  the numerical types in =std::sync::atomic=, all allow mutating the state of objects through an immutable borrow.  The logic behind this is that if the programmer knows what they are doing, they can safely mutate shared state.  The preferred way to do this, is by relying on the programmers of the Rust standard library or any of the crates on crates.io, to have ensured that mutation via the public API of =Mutex= does not produce undefined behaviour, or errors due to concurrent modification.
 
+The difficulty of properly syncrhonising state in Rust is reduced to the problem of picking the correct interior mutability primitives.  While it is in a way significantly simpler than managing mutual exclusion logic manually, still concurrency requires some subtle thought.  While it is no longer as easy to produce a concurrent modification error by modifying a collection while iterating over it, it is still possible to cause a deadlock.
+
+Similarly, while smart pointers proect one from causing undefined behaviour, leaking memory in Rust is just as easy as in many other non-garbage collected languages.
 
 
 
+** Conclusion
+As we have hopefully demonstrated Rust is a capable OOP language, despite eschewing many of the common design choices of class-oriented OOP languages, namely C++ and Java.  Given the static typing and preference for monomorphic dispatch, Rust is fundamentally different from languages with an object-first mentality, such as JavaScript and Smalltalk and only some design patterns from these languages would translate into Rust.
+
+Rust is a better OOP language than it is a procedural language, due to the fact that many of its design decisions were a direct reaction to some of the problems that are apparent in modern class-oriented programming.
+
+It is a language that supports OOP, rather than encourages it, in the sense that it does not commit to a wholly principled view.   However, the paradigm whose goals align more with those of Rust is OOP, and other paradigms are supported to a lesser extent.
+
+
+
+
+
+
+* Functional Rust
+Functional programming is often touted as Rust's most prominent inspiration.  While Rust can be considered to have the larget amount of functional-inspired features of the mainstream languages, the support for the functional programming style is about on par with its support of the procedural style.
+
+** Algebraic data types
+
+Rust as we have demonstrated before supports =struct= declarations, which in the functional programming terminology are known as /product/ or /record types/.
+
+*** Overview
+Rust also supports anonymous positional records known as tuples,
+#+BEGIN_SRC rust
+  let tuple: (&str, [u8; 5]) = ("hello", b"world");
+#+END_SRC
+named positional records, known as =tuple structs=:
+#+BEGIN_SRC rust
+  pub struct Both<T, E>(T, E);
+#+END_SRC
+and named nominal sum types, known as =enums=:
+#+BEGIN_SRC rust
+  pub enum Either<T, C> {
+	  TupleVariant(T),
+	  StructVariant {
+		  variant_field: C
+	  }
+  }
+#+END_SRC
+which can all be generic using the monomorphisation mechanism described in the OOP chapter.
+
+Interaction with these types is facilitated by pattern matching via either the =match= keyword, the =if let= and =while let= conditional and loop keyword variants, as well as destructuring using the =let=  or in function signatures.
+
+For now let us consider how one would access each individual value stored inside the tuples, tuple structures, and =enum=-erations.
+
+#+BEGIN_SRC rust
+  let tuple = ("hello", b"world", 3, 4, 5, 6);
+  let (first, _ , third, _ , fifth, _) = tuple.clone(); // We need to clone, because a `String` is not a primitive type
+  let first: &str = tuple.0;			 // Short-hand syntax. Useful when ignoring
+  let first_clone = first.clone().to_owned(); // So-called owned `String`.
+#+END_SRC
+
+In this example we mix the positional destructuring as well as the /dot/ syntax for accessing wrapped structures.  Typically tuples are needed when more than one value should be returned from a function and immediately processed.  Tuples should be regarded as anonymous structures, and accordingly, used only when the positions of objects can alone convey the meaning.
+
+#+BEGIN_SRC rust
+  struct NamedTuple(pub u32,  pub u16);
+  // The structure names are ignored. This is to encourage using braced
+  // structs if the name matters.
+  let NamedTuple(first, second) = NamedTuple(32, 44);
+  // Now the names are bound, and since they are both primitive, can be
+  // copied out.
+#+END_SRC
+
+Tuple structures are very rarely used with more than one argument.  They are a convenient short-hand for wrapping other structures, although they can be used to differentiate tuples /with different names/ but identical types.
+
+Named tuples, also known as /tuple structs/ are almost exclusively used to wrap and decorate foreign types, as their utility is primarily in preventing types with different structure from behaving identically.
+
+
+*** Enumerations
+#+BEGIN_SRC rust
+  pub enum Request {
+	  Process(&str),
+	  Transact{
+		  source: Id,
+		  destination: Id,
+		  transaction: Box<Request> // Recursive data must have indirection
+	  },
+	  Expunge,					// If no data, can omit parens
+	  Close = 4,					// Explicitly assign representation as integer to this enum
+  }
+
+  match {
+	  Request::Process("hello") | Process("Hello") => println!("Hello"),
+	  Request::Transact{ source, destination, transaction} => {
+		  println!("{source} to {destination}");
+		  transaction.execute()
+	  },
+	  _ => println!("Either close or expunge, don't know which")
+  }
+#+END_SRC
+
+Enumerations are the main reason why some believe Rust to be a functional, or a functional-inspired language, as enumerations allow one to record type information at runtime and defer control flow.  Specifically, in a traditional OOP language, if one wants to have a heterogeneous list of values, they have only one choice, the equivalent of =Vec<Box<dyn SomeTrait>>=, which is relatively inexpensive, and often does /not/ involve a virtual call resolution.
+
+But there is a third option, in case one does not want to model the differences in behaviour associated to the type, but rather /ad-hoc/, then we have the option of creating an =enum= which must ahead of time, declare the types which can be included in that structure.
+
+This relieves us of many limitations associated to trait objects, namely our inability to clone without proper setup, and a few other problems are easily mitigated.  An =enum= is a distinct type, which works as a =union= does in a language like C or C++.  Unlike those languages, an =enum= already contains information about which variant it is.  This information is usually stored as a number, but one can control that with a compiler attribute.  In the example above, the =Process= variant is stored with the value =0=, and all variants except =Close= are numbered sequentially.  =Close= is set to =4= which means that the tag value of =3= is never assigned.
+
+Tagged enumarations are always safe to operate on, at the cost of wasting typically an extra machine word.  Clippy, the static analysis tool will warn about wildly diverging enum sizes, and suggest using a =Box= to heap-allocate the larger variant, but this is not always good advice, which is why it's relegated to a linter.
+
+Unlike OCaml and Haskell, the Rust programming language cannot infer if the type can be safely inlined, so recursive enumerations must always refer to themselves with a type that stores them elsewhere.  This requirement has far reaching consequences limiting Rust's ability to support a pure functional or semi-imperative functional approach.
+
+Enumerations are used extensively in Rust.  For example, of the two mechanisms of error propagation, the one that the user is meant to be able to control involves the =std::result::Result=, enumeration.  Most fallible operations use =std::option::Option=, which is yet another simple enum.
+
+*** Option
+
+The most important[fn:17] =enum= is the built-in =Option= type.  The technical term for =Option= is a monad.  To those familiar with that concept, Rust is disappointing, given that this is the only[fn:18] kind of monad that Rust /can/ support, and its type system is somewhat restrictive.  However both the extent to which that one type can influcence the usability of Rust and its prevalence are sights to behold.
+
+Option dictates how any fallible operation in Rust is to be conducted, in the absence of any other facilities.  If you want to build a layer that works without a heap allocator; or without any external dependencies to run inside a virtual machine, being miserly with space?  =Option= is the best choice for these circumstances.
+
+#+BEGIN_SRC rust
+  let posibly_overflowing: Option<u64> = u64::MAX.checked_add(u64::MAX); // Contains None
+#+END_SRC
+
+The above example demonstrates a typical application: the unsigned integer addition can fail for one reason and one reason only, if the numbers are too large to fit into memory.   As a result, libraries will signify the failure of such an operation with an =Option= type, which must then be used with an explicit handling of the =None= variant.
+
+As such it is somewhat inconvenient to add more than number that way:
+#+BEGIN_SRC rust
+  u64::MAX.checked_add(u64::MAX).checked_add(u64::MAX);
+  // This expression does not compile, because the `Option` cannot be added to another number
+#+END_SRC
+While this inconvenience can be considered a problem in most other languages, the Rust approach is to make problematic statements complicated.
+
+In this particular case, one must be cognisant of the fact that the addition can (and in this case /will/) fail.
+#+BEGIN_SRC rust
+  let failed_addition = u64::MAX.checked_add(u64::MAX);
+  match failed_addition {
+	  Some(_) => unreachable!(),
+	  None => println!("Yep, adding two maximal values should overflow")
+  }
+#+END_SRC
+Here we've used the =unreachable= macro, to signal to the compiler, that we can guarantee that the pattern =Some= with any form of data is not only not handled, but impossible.
+
+In circumstances such as this (with an important distinction), it is common to see the usage of =unwrap= and =expect=, which are correspondingly designed to handle the opposite situation.
+
+#+BEGIN_SRC rust
+  let normal_addition: u64 = 0.checked_add(1).unwrap().checked_add(2).unwrap();
+#+END_SRC
+While =unwrap= is easier to use, it is much more common to use =expect=; as it allows you to specify the invariant and explain why a particular =Option= will result in the correct value:
+#+BEGIN_SRC rust
+  let better_addition: u64 = 0.checked_add(1)
+	  .expect("0 + 1 == 1 < u64::MAX")
+	  .checked_add(2)
+	  .expect("1 + 2 == 3 < u64::MAX");
+#+END_SRC
+This is somewhat verbose, but well warranted in mission critical code.
+
+One, of course, doesn't always have the luxury of knowing ahead of time, which of the two possibilities is going to occur.  In a number of cases, nothing sensible can be done, except printing a message and exiting the program immediately.  In these cases =expect= is used:
+#+BEGIN_SRC rust
+  fn add(num: u64, num2: u64) -> u64 {
+	  num.checked_add(num2).expect("The function `add` was called with overflowing addition. Execution cannot continue. Exiting")
+  }
+#+END_SRC
+If the function is called with arguments whose addition overflows, the program halts immediately printing the error message.  This pattern is called a *panic*.
+
+The =expect= method is a generic method associated to =Option=, that has for all intents and purposes the following approximate implementation
+#+BEGIN_SRC rust
+  impl<T> Option<T> {
+	  fn unwrap(self) -> T {
+		  match self  { Some(value) => value, None => panic!() }
+	  }
+	  fn expect(self, message: &str) -> T {
+		  match self {
+			  Some(value) => value,
+			  None => panic!(message)
+		  }
+	  }
+  }
+#+END_SRC
+Note the usage of the =panic= macro.
+
+#+BEGIN_aside
+At this point it is worth asking what would happen if a branch containing =unreachable= is ever executed.  At first glance in both cases the program should stop executing and print an error message.  And indeed this is what happens on a default (debug) build.
+
+However, there is a difference in intention.  A =panic= is a situation in which the program cannot sensibly recover.  An =unreachable= situation is a programmer error, in which it is not safe to continue execution.  As such it is the programmer's responsibility to ensure that an =unreachable= expression is truly not reachable, with tests.  Once that is asserted, however, the programmer may well expect the compiler to optimise away all branches associated with =unreachable= code.
+
+As such, a =panic= will always exit the program, however reaching an =unreachable= statement in a release build is *undefined behaviour*.
+#+END_aside
+
+#+BEGIN_aside
+It should be noted that to a functional programmer, any function that contains =expect=, =unwrap=, =panic= or a faulty =unreachable= should seem problematic.  In Haskell, such functions should be annotated with a monad, that indicates that a subtree of function calls may result in a panic.  Rust offers no such facilities, as that would increase the verbosity of the programming language further.
+
+The =clippy= static analysis tool has a lint, which prevents panics in the code.  However, that tool must be enabled by default, and downstream users may mask panics with an =allow= directive.   This might seem like it defeats the purpose, but in most situations, this is sufficient.
+#+END_aside
+
+One important aspect of =Option= is that it is highly optimised.  While normally, one must always reserve a machine word to handle an =Option= value, in some situations, =Option= can take up as much space as a =union= would in C.
+
+Specifically, this is known as the niche optimisation.  If a type included in the =Option<T>='s generic argument has been marked as not accepting all possible values, but instead being restricted to for example being non-zero, as for example =NonZeroU64=, =Box= (in general Rust pointers are never =null=), and custom types; =Option= may use one of those values to represent the =None= variant.   As such it is always preferable to represent a C-style[fn:19] nullable pointer as a Rust =Option<Box>=.
+
+***  =Result=
+
+Result is a minor extension of =Option=.  For all intents and purposes, the definition of =Result= can be regarded as
+#+BEGIN_SRC rust
+  pub enum Result<T, E> {
+	  Ok(T),
+	  Err(E)
+  }
+#+END_SRC
+
+Note the absence of any trait requirements to be wrapped in an =Err= variant.
+
+It is typical to see the =Result= in situations in which more than one thing can go wrong, in a chain of interactions.  It is also possible to mix =Option= and =Result=, but often by converting the =None= variant into a proper =Result=.
+
+One may ask what is the important difference in between =Option= and =Result=, and why wouldn't =Result<T, ()>= be equivalent to an =Option=.
+
+Indeed, structurally these types would be identical.  And indeed, many of the optimisations which pertain to =Option=, are applied to to =Result= if its =Err= variant carries no data.  So why then do we have a separate =Option= type?
+
+It turns out that while structurally the concepts are similar, the intention being communicated is different.  A =None= variant isn't usually an error.  A user not specifying an optional parameter at the command-line is hardly an error and hardly needs to be treated as such.  Not finding a particular key in a database is different to not being able to execute any query on the database because of incorrect credentials.  Case in point:
+
+#+BEGIN_SRC rust
+  match query_result {
+	  Ok(Some(user_id)) => user_id.record(),
+	  Ok(None) => log::debug!("Found nothing"),
+	  Err(e) => log::error!("Database is down, possibly ran out of disk space, please contact admin")
+  }
+#+END_SRC
+
+*** Defining error types
+However, there is a difference in intention.  In the above example of checked addition, it is sensible to define an arithmetic error enumeration:
+
+#+BEGIN_SRC rust
+  #[non_exhaustive]
+  pub enum ArithmeticError {
+	  Overflow,
+	  Underflow,
+	  DivZero,
+	  LogNegative,
+	  // ...
+  }
+#+END_SRC
+
+which must always be handled explicitly and during each operation.  It would also be sensible to attach data to each variant, /i.e./ to at least know why specifically did the operation overflow.  To do that, though, one has many options, the most general and therefore ergonomic of which is to define the error variant as follows:
+
+#+BEGIN_SRC rust
+  pub enum ArithmeticError{
+	  Overflow{
+		  lhs: Box<dyn Display>,
+		  rhs: Box<dyn Display>,
+		  line: usize
+	  },
+	  Underflow {
+		  lhs: Box<dyn Display>,
+		  rhs: Box<dyn Display>,
+		  line: usize
+	  },
+	  DivZero {
+		  lhs: Box<dyn Display>,
+		  line: usize
+	  },
+	  LogNegative,
+  // ...
+  }
+#+END_SRC
+
+This can be considered very good in terms of detail, and this kind of arithmetic error can be applied to external numerical types, for example =Decimal=, and or one of many binary coded decimal types.  The only requirement is that the left-hand-side and the right-hand-side be printable and that a line number be provided.
+
+While for some kinds of code, such =ArithmeticError= types are useful, in most situations we know which type was operated on and we can rely on Rust generics to carry that information with us:
+
+#+BEGIN_SRC rust
+  pub enum ArithmeticError<T> {
+	  Overflow {
+		  lhs: T,
+		  rhs: T,
+		  line: usize
+	  },
+	  Underflow {
+		  lhs: T,
+		  rhs: T,
+		  line: usize
+	  },
+	  //...
+  }
+#+END_SRC
+
+This structure is far more useful, because we can then conditionally implement =Display= for it if =T: Display=, use =Debug= and do a great many other things.
+
+The simplest error enumeration is by far the least restricting: no data needs to be carried, as such, the entire enumeration can implement =Copy=.
+
+In the second case, the entire error is easy to mark in one's return type, and is very general.  But because of the generality, one cannot (for example), implement =Clone= for this type, and =Debug= would have to call the =Display= implementations of the underlying types.  Plus, each =Box<dyn Display>= is really a two-word fat pointer.  Most types for which it would be used fit into a single machine word.
+
+The generic error bloats the compiler output and the executable.  Furthermore, it would require the user to explicitly annotate the return type of the error.  The only place where that wouldn't be a problem is the library implementing the checked arithmetic operations, by being generic.
+
+Finally, the astute type-level programmer, would find that the =ArithmeticError= is really, in all cases, accepting of data types that should not appear in arithmetic to begin with.  One can conceivably construct =ArithmeticError::Overflow= for types in which addition is not defined.  Setting explicit trait bounds without introducing more than one generic type parameter is also not possible, resulting in an enumeration that has as many type parameters as there are variants, making returning such a type exceedingly problematic.
+
+If type level soundness is important, it would be much better to have separate structures which have the appropriate trait bounds:
+#+BEGIN_SRC rust
+  pub struct Overflow<T>
+  where
+	  T: core::ops::Add<T>
+  {
+	  lhs: T,
+	  rhs: T,
+	  code_line_number: usize
+  }
+#+END_SRC
+
+and conditional implementations for cases where =T= would implement =Debug= and =Display=, =Clone= if types are =Clone= and =Copy= if the types are lightweight.  But in that case, if more than one arithmetic operation can fail, and for more than one type, one would still have to generate a bespoke enumeration.
+
+Alternatively, one may be tempted to use a =Result<T, Box<dyn std::error::Error>>=, which in principle should provide enough facilities for sensible error handling.  The sad reality is that at this point there are very few things that one can do to the =Err= variant to sensibly recover.  In fact one cannot even =Clone= such errors, as is the case with =std::io::Error=.
+
+This is a fundamental problem in the design of =std::error=, and it cannot be fixed.  There are few reasons why at this point it wouldn't be sensible to simply print out the error and continue (or panic).
+
+There are numerous libraries that aid in designing error variants.  However, one is always faced with the following dilemma: errors are either too much work to instantiate, or too much work to handle.
+
+As such there is a soft-guideline: errors in libraries should be easy to handle, but difficult to construct; and errors in user-facing code should provide extra context, but make no attempt at recovery.  The result is a considerable shortfall in what Rust is capable of and what the reality of error handling.
+
+Yours truly has a vested interest in correcting this.
+
+**  Functions as arguments
+
+Borrowing from functional languages, Rust supports passing functions as arguments to methods and functions.  The simplest example is the following method:
+
+#+BEGIN_SRC rust
+
+  impl<T> Option<T> {
+	  pub fn map<U, F>(self, f: F) -> Option<U>
+	  where
+		  F: FnOnce(T) -> U,
+	  {
+		  match self {
+			  Some(x) => Some(f(x)),
+			  None => None,
+		  }
+	  }
+  }
+#+END_SRC
+Note the number of generic parameters.  Firstly, the type stored inside the option is declared as part of the inherent implementation declaration.  Secondly, we are declaring two new types: =F= and =U=.  And we add an additional trait bound, but inside of a so-called =where= block, which allows for more elaborate trait bounds than /e.g./  declaring so in angle brackets.  Namely, we require that the function be applicable /once/ to the value of type =T= and return a type =U=.  This does not make each usage of =map= a mess, however, due to Rust cleverly deducing the return type from the function declaration, which is part of the reason why it was preferable to always provide function signatures.
+
+Note that this implies that each invocation of =map= must be in-line; that is, that =map= may never cause a virtual call overheead, and thus there are no good reasons to *not* use map, other than an explicit =return= statement involving the enclosing function.  Unless the function passed to =map= is bound to the same exact name, no matter if the content of the function definition is identical, the functions are of *different types*.  For example, the function
+#+BEGIN_SRC rust
+  fn add1(thing: u64) -> u64 {
+	  thing + 1
+  }
+
+  fn add1_again(thing: u64) -> u64 {
+	  thing + 1
+  }
+#+END_SRC
+
+are distinct types as far as the Rust type checker is concerned.
+
+#+BEGIN_aside
+Given that the type of a function is is not a higher-kinded type as in /e.g./ Haskell, but rather more akin to a /function pointer/, Rust allows for sound interactions between generics and trait objects and functions.
+#+END_aside
+
+Functions can be passed by name:
+#+BEGIN_SRC rust
+  let thing = Some(3_u64);
+  let thing_plus_one = thing.map(add1);
+  let thing_plus_two = thing.map(add1);
+  let thing_plus_three = thing.map(add1_again);
+#+END_SRC
+If the function is associated to a trait, with the =Trait::function= syntax:
+#+BEGIN_SRC rust
+  let thing = Some(3_u32);
+  let thing_plus_one = thing.map(Into::into).map(add1);
+#+END_SRC
+where =Into::into= first handles the conversion and then the argument is explicitly converted into a =u64=.
+
+In more complex cases, such functions are usually defined in-place[fn:20]:
+#+BEGIN_SRC rust
+  let thing = Some(100_u64);
+  let outcome = thing.map(|one_hundred| {
+	  println!("got {one_hundred}");
+	  return (one_hundred/100 as f64).into();
+  });
+#+END_SRC
+
+*** =map= and monadic failure handling
+
+With the exception of =panic=, all error handling mechanisms in Rust are explicit and involve a value being returned with the usual mechanisms.  While this is not too different from how it was possible, indeed, encouraged to handle errors in C (and to an extent C++), there are crucial differences in Rust's approach, namely, escaping the /tower of doom/.
+
+In a C-like program.  It is common to see a pattern of nested =if= statements, whose sole purpose is to detect a rogue =falsy= value, namely =NULL=, but also error codes.  In most circumstances, the only sensible thing to do in that situation is to return the value, and exit the function, with rare exceptions in which it might also be necessary to terminate the program.
+
+While it is certainly possible to do the same in Rust:
+#+BEGIN_SRC rust
+  let config_file = open(path);
+
+  if config_file.is_some() {
+	  let config_variable = config_file.clone().unwrap().variable;
+	  let result_set_config_variable = some_subsystem.set_variable(config_variable);
+	  if result_set_config_variable.is_ok() {
+		  let some_other_config_variable = config_file.unwrap().some_other_variable;
+		  if some_other_config_variable.is_some() {
+			  let result_set_other_config_variale = some_subsystem.set_variable(some_other_config_variable.unwrap());
+			  if result_set_other_config_variale.is_ok() {
+				  //...
+			  }
+		  } else {
+			  return None
+		  }
+	  } else {
+		  println!("{:?}", result_set_config_variable);
+		  return None;
+	  }
+  } else {
+	  return None;
+  }
+#+END_SRC
+This style is actively discouraged.
+
+Instead it can be a chain of operations:
+
+#+BEGIN_SRC rust
+  open(path)
+	  .map(|file| file.variable) // See [fn:20]
+	  .map(|variable| some_subsystem.set_variable(variable))
+	  .map_err(|err| {
+		  println!("{:?}", err);
+	  })
+	  .ok()						// Convert to Option
+#+END_SRC
+which will implicitly decay to =None= whenever the opposite takes place.  The eagle-eyed reader will have found that this is not exactly equivalent to the previous example with the tower of doom[fn:21].
+
+Because Rust is not a functional language, the typical patterns which would allow one to replicate the full logic of the tower of doom are much harder to express, and so the monadic style is supplemented by the =?= operator.
+
+The statement 
+#+BEGIN_SRC rust
+  let config_file = open(path)?;
+#+END_SRC
+is equivalent to
+#+BEGIN_SRC rust
+  let config_file = {
+	  let maybe_config_file = open(path);
+	  match maybe_config_file {
+		  Some(file) => file,
+		  None => return None,
+	  }
+  }
+#+END_SRC
+but much less verbose.  As such the above example with the tower of doom can be rewritten in an even simpler way:
+
+#+BEGIN_SRC rust
+  let config = open(path)?;
+  some_subsystem.set_variable(config.variable)
+	  .map_err(|err| println!("{err:?}"))
+	  .ok()?;						// Note this conversion
+  some_subsystem.set_variable(config.other_variable?)
+	  .map_err(|err| println!("{err:?}"))
+	  .ok()?;
+#+END_SRC
+
+Which is far more readable.  Note that we had to convert from an =Err= to =None= explicitly.  Rust does not implicitly destroy information and any lossy conversions must be done with the programmer's explicit consent.
+
+We can apply the =?= operator inside functions that return either =Option= or =Result= until the =try= blocks are stabilised.
+
+#+BEGIN_aside
+New programmers often get confused about the scope within which the =?= operator works.  If it is called inside an anonymous function, the =?= returns from that function, and not the enclosing scope, which is why the destructuring control flow is sometimes preferred over monadic methods.
+#+END_aside
+
+To attain mastery, we propose practicing and memorising the following methods
+
+| Option         | Result         | Use                                                                    |
+|----------------+----------------+------------------------------------------------------------------------|
+| =unwrap=         | =unwrap=         | Get enclosing success value, panic otherwise                           |
+| =expect=         | =expect=         | Like =unwrap= but print custom message in addition to the error message  |
+| =map=            | =map=            | Apply a transformation to the =Some/Ok=.                                 |
+| =inspect=        | =inspect=        | Same as =map= except take reference and don't =move=                       |
+| =map_or=         | =map_or=         | Same as =map=, but also replace =None/Err= with the provided default value |
+| =map_or_else=    | =map_or_else=    | Same as =map_or= but lazy evaluate.                                      |
+| =unwrap_or=      | =unwrap_or=      | Replace =None/Err= with the provided value                               |
+| =unwrap_or_else= | =unwrap_or_else= | Like =unwrap_or= but lazy                                                |
+| =transpose=      | =transpose=      | Convert =Option<Result>= to =Result<Option>= and back                    |
+#+CAPTION: Monadic methods commont to both =Result= and =Option=.
+
+| Option               | Use                                                                                           |
+|----------------------+-----------------------------------------------------------------------------------------------|
+| =ok_or=                | Convert to =Result=, by mapping =Some= and eagerly evaluating =None=                                |
+| =ok_or_else=           | Same as =ok_or= except lazy                                                                     |
+| =and_then= and =flatmap= | Apply =f= to the enclosed =Some= or else return =None=.  Used to collapse =Option<Option>= to =Option=. |
+| =filter=               | Retain only values where =f= returns =true=.                                                      |
+| =or=                   | Return either the original option if it =is_some= or replace =None= with the argument             |
+| =or_else=              | Like =or= except lazy                                                                           |
+#+CAPTION: Recommended monadic methods for =Option=.
+
+| Result  | Use                                           |
+|---------+-----------------------------------------------|
+| =ok=      | Map =Ok= to =Some=, and lossy convert =Err= to =None= |
+| =map_err= | Handle the error                              |
+| =flatten= | Used to collapse =Result<Result>= to a =Result=   |
+#+CAPTION: Recommended monadic methods for =Result=.
+
+Mastery of these methods can go a long way to ensure readable code.
+
+
+*** Destructuring, control flow
+
+The less used, but no less useful are the methods specific to Rust.  We include them in the functional chapter, because we believe that these control flow constructs are useful when programming in the functional style, despite the fact that a lot of them would not make sense in a functional programming language such as Haskell or OCaml.
+
+The first and simplest type of control flow is =if let=.  It acts like the boolean if, to the point of having a matching else, but also pattern matching on the interior of enumerations and binding a value only if the enumeration happens to be the right variant:
+#+BEGIN_SRC rust
+  fn print_if_some<T: Display>(maybe_value: Option<T>) -> Option<T> {
+	  if let Some(value) = maybe_value {
+		  println!("{}", value);
+	  }
+	  maybe_value
+  }
+#+END_SRC
+These control flow constructs are smart enough to bind names to references if only a reference is needed for the body of the expression.
+Similarly to the boolean =if=, if the expression evaluates to a non-trivial value, the =else= clause is mandatory.  In that case, the =if let/else= construct is equivalent to the wildcard pattern in =match=.
+
+The =if= part can often be dropped, if the pattern is known as =refutable=, by which we mean that it requires more than two =match= clauses.  For example:
+#+BEGIN_SRC rust
+  let Ok(value) = u64::try_from(input) else {
+	  panic!("Cannot convert {input:?} to `u64`");
+  }
+  value
+#+END_SRC
+This pattern is equivalent to =expect=, but that is not always the case, if for example, the pattern involves more than one value,  and isn't strictly a variant.  For example:
+
+#+BEGIN_SRC rust
+  let (Some(Some(value)), None) = (maybe_maybe, definitely_none) else {
+	  panic!("Faulty logic, above code should be checked for correctness");
+  }
+  value
+#+END_SRC
+
+If the pattern is not =refutable=, that is, it can be matched with /one clause/ the =else= part can be dropped.
+
+One particularly good application for =while let= is in loops over iterators.  If for some reason the monadic iterator methods cannot be used, /e.g./ =map=, =reduce= /etc./; =while let= can greatly ease the usage of =Iter::next= to continue iteration.
+
+#+BEGIN_SRC rust
+  while let Some(value) = some_iterator.next() {
+	  return_iterator.push(value);
+  }
+#+END_SRC
+This loop acts almost identically to the original =while=.  It has some advantages also in situations in which the appropriate boolean trait is not implemented for a particular type, but a condition is needed:
+
+#+BEGIN_SRC rust
+  while let Complex{ real, imaginary } if real > 0 && imaginary > 0 = cmplxs[i] {
+	  println!("Point is in first quadrant");
+	  i+=1;
+  }
+#+END_SRC
+In this example, we know that ordering cannot be defined for the field of complex numbers.  We do however, care about the individual values, for which total ordering is defined, and after binding them, we simply add a guard statement which has the required predicate.
+
+Another important location where irrefutable (patterns with one possible structure) are used is in destructuring a value.  We touched upon it with respect to =let= statements, but Rust also allows one to destructure irrefutable patterns in function arguments.  This is often useful for getting rid of =self= in method implementations:
+
+#+BEGIN_SRC rust
+  fn norm(Complex{ real, imaginary}: &self) -> {
+	  return real*real + imaginary*imaginary
+  }
+#+END_SRC
+Needless to say this pattern is rare to see, because it is often overshadowed by =self= in terms of clarity, and the dot-syntax in terms of maintainability.  Unless the value has a short name with values bound by name, it is often shorter to repeat =self= or to bind those values with =let= and the dot syntax.
+
+*** The =match= statement
+
+Now we come to the most powerful of Rust's pattern matching facilities.
+=match= is often misused in cases where an =if let= or =?= should have been used.  One of its key advantages is that =match= can act on nested patterns.  One particular example is
+#+BEGIN_SRC rust
+  pub fn env_or_fail(candidates: Vec<&'static str>) -> Result<Option<String>, Error> {
+		  let mut found = None;
+		  for candidate in candidates {
+			  match (&found, std::env::var(candidate)) {
+				  (_, Err(std::env::VarError::NotPresent)) => continue,
+				  (_, Err(std::env::VarError::NotUnicode(_))) => {
+					  eprintln!(
+						  "The environment variable value for {candidate}, was not valid unicode"
+					  );
+				  }
+				  (None, Ok(value)) => {
+					  found = Some((candidate, value));
+				  }
+				  (Some((previous_key, previous)), Ok(value)) if *previous == value => {
+					  eprintln!("Redundant specification via environment variable {candidate}. Previously set via {previous_key}");
+				  }
+				  (Some((previous_key, previous)), Ok(value)) => {
+					  eprintln!("Inconsistent specification via environment variable {candidate}. Expected {previous} found {value}");
+					  eprintln!("This may be a configuration error, aborting");
+					  return Err(format!("The environment variable was set twice, {previous_key} to {previous} and {candidate} to {value}"))
+				  }
+			  }
+		  }
+		  Ok(found.map(|(_, value)| value))
+  }
+#+END_SRC
+This function when given a collection (=Vec=) of potential names for each environment variable does the following: it checks if the variable is unset, this is normal.  If the variable is set to invalid unicode, we mainly want to notify the user that it was, and continue searching.  Invalid unicode in one of those variables is not a problem, if another candidate string contains a known value.  Before this point, what is contained in =found= does not concern us, so we ignore it.
+
+After we have identified a valid string, the situation is different: we remember the key with which the value was set, and assign the value.  After this point, the pattern with =None= is never going to recur; but the pattern with invalid unicode, no variable and a another variable set can still occur.
+
+Under ordinary circumstances it'd be enough to terminate the function as soon as the first match is found, but we want to notify the user if they have accidentally set the value twice via two aliases.  If the two values are identical, it's fine, though the user should be aware of this.  If the values are different, then there's very likely some overriding which didn't go according to plan...
+
+In other languages this would be difficult to express, either because they don't have the pattern matching facilities to enumerate the different possible scenarios as cleanly as we have.  Or because they are very stringent on mutation, and overriding the value =found= would be far more verbose.  As such, Rust has its own style that is unlike any other language.
+
+*** Error handling, panics
+
+In Rust, there is a great deal of decision making that is about delegating responsibility.  The =?= operator is a clean way of delegating failure in the current scope, to the enclosing scope.  With Options, that happens trivially, only the type =T= is important.  With =Result= the =?= operator also handles conversions, if the error type in the enclosing scope can be constructed from the current error.  This is often the case if the current error is a variant in the enclosing scope's error =enum=.
+
+Specifically it is commmon to see a pattern in which a library defines an overall =enum= for all conceivable errors as variants.  Sometimes, if there are too many variants, the patterns are split into trees.  Within those trees each leaf is its own type, asny branch is an =enum= that contains a =From<LeafType>= implementation for each such leaf.  All of these additionally implement =std::error::Error= which is the standard library error trait, which additionally requires the Error types to implement =core::fmt::Debug= and =core::fmt::Display=.  
+
+
+
+** Action items
 *** TODO Mention pointers and unsafe
 *** TODO Mention array index notation in the /procedural/ chapter
 * Appendix
 
-**** Worked example: custom traits
+** Worked example: custom traits
 
 We must now consider how one can define traits, on a practical example.  The above =Complex<T>= structure definition allows one to construct types that are not sensible: for example =Complex<bool>= or =Complex<char>=.  We would like to differentiate the primitive types that represent numbers from other general primitive types.
 
@@ -944,17 +1575,28 @@ Firstly, consider how a complex number is defined in abstract mathematical terms
 
 
 * Footnotes
-[fn:16] While writing code via generics guarantees that it will be monomorphically dispatched, trait object code can also be de-virtualised by LLVM.
 
+[fn:21] and also that anonymous functions are permitted to capture objects from the enclosing scope.  This shall become important in later chapters.
+[fn:20] This is particularly useful, because the point-free notation in Rust doesn't allow access to specific fields.
+
+[fn:19]  Converting pointers gotten from FFI to =Option<Box>= is a different matter entirely, as it can lead to double free, or use-after-free, if e.g.  that pointer is managed by the external library.
+
+[fn:18] One remarkable application of monads in Rust would have been =unsafe=.  Unfortunately it would have introduced a somewhat impractical delineation between =unsafe=-in-principle code, and code that uses purely safe Rust.
+
+[fn:17] The type itself is not special, but its structure is handled in a special way by the Rust compiler.
+
+[fn:16] While writing code via generics guarantees that it will be monomorphically dispatched, trait object code can also be de-virtualised by LLVM.
 
 [fn:15] The slice is an example of a fat pointer, in that =&[u8]= is both a reference to the first element of the array, and the length of said array.
 
 [fn:14] The reason is simple.  If your function accepts a =&Parrot= you should invoke =&zoo.parrot=, rather than =zoo.as_ref()=.
 
 [fn:13] Although historically dynamic linkage was preferred.
+
 [fn:12] This is most useful in using =enums= which we shall talk about later.
 
 [fn:11] Which we have not covered in this section, as they do not work as strings in procedural languages.
+
 [fn:10] As in =super::super= is not the parent of the parent.
 
 [fn:9] That module is almost always a file =lib.rs= in the =src/= subdirectory of the project.
