@@ -1248,7 +1248,117 @@ As such there is a soft-guideline: errors in libraries should be easy to handle,
 
 Yours truly has a vested interest in correcting this.
 
-**  Functions as arguments
+**  Type system
+
+*** Strict typing and type inference
+
+Rust follows an ML-style strict typing system.  While we have already touched upon some of the corollaries of that system in the procedural chapters, we must at some rate also describe how that fits into the functional programming paradigm.
+
+Like ML, the type system is restrictive enough so that in most circumstances, one does not need to annotate any types at all.  Unlike ML, this doesn't extend to function signatures.  This, while somewhat annoying is a necessary addition to make Rust easier to manage at large, and permits a more generic system.  For example, unlike ML, it is possible to overload the numerical addition: =3_u32 + 2_32= is a different function to =3_u64 + 2_u64=, which is different still from =MyType(1) + MyType(2)=.
+
+There are a few reasons for this departure.  Rust is a systems programming language.  This means that one has to be precise with the type of integer that one uses, as it is not possible to simply delegate that information to the compiler.  True in /most/ situations it is best to use the native register-width integer, and it is /sometimes/ better to use arbitrary precision unsized integers too.  However, the choice to do so should be up to the programmer and not the compiler.
+
+As such it was necessary to consider whether strict typing was more important than the annoyance of having defined different integer-width operators.  Making an ad-hoc built-in distinction was ruled out, even though languages like Java happily live in such a world, for Rust it was decided not to be the case.  Another option would have been to enhance the macro system to be type-aware, which would then overshadow the generics, and complicate interactions between libraries.  As such it was decided to introduce the trait system.
+
+We have motivated and included the trait system in the discussion of Rust as a primarily OOP language, and while it is in truth no different to the interface system of /e.g./  Java, it is not, by any means exclusively similar to that.  For this purpose we shall consider it in the functional chapters also.
+
+Rust's trait system is largely inspired by the type class system of Haskell, but it is not the same, due to limitations of the Rust type system.  As such many solutions to many problems couldn't be copied, and had to be adapted.
+
+*** Traits as type classes
+
+A trait can be regarded very similarly to a type class in lower kinded situations.  We have already discussed the simplest traits: =Clone= and dependent traits =Copy=, with additional deeper discussions of =Default= postponed to later chapters.  In this chapter we shall focus on the strictly mathematical =PartialEq=, =Eq=,  and later =PartialOrd= and =Ord= traits.
+
+*** =PartialEq=
+
+So what is =PartialEq= for?  It is the "legwork" trait for interactions with the ==== operator.  Implementing this trait implies implementing the =eq= function and optionally overriding the =ne= method.  This is what an example implementation looks like for the =Complex<T>= type:
+
+#+BEGIN_SRC rust
+  impl<T: PartialEq> PartialEq for Complex<T> {
+	  fn eq(&self, other: &Self::Rhs) -> bool {
+		  self.real == other.real && self.imaginary == other.imaginary
+	  }
+  }
+#+END_SRC
+By construction unless we implement =ne= the default implementation associated to this trait is a strict inverse.  A =Complex= is either equal or it is not.
+
+Upon first glance, this relation has the following properties:
+1) for all =a=, =a.eq(a)=;
+2) if =a.eq(b)= then =b.eq(a)=;
+3) if =a.eq(b)= and =b.eq(c)= then =a.eq(c)=;
+
+Given that the Rust compiler has no way of checking that this rule holds, we must manually signal to the compiler that our implementation is a full equality relation by implementing the marker trait =Eq=, similar to how we needed to implement =Copy=, if the =Clone= was a bit-wise copy of the object.
+
+We reflect the fact that the equivalence relation properties only hold if they hold for the underlying type =T=, if those properties hold for values of type =T=, with the following implementation:
+
+#+BEGIN_SRC rust
+  impl<T: Eq> Eq for Complex<T> {}
+#+END_SRC
+which would implement =Eq= for =Complex<u64>= but not, for example for =Complex<f64>=.
+
+So what this means is that a regular programmer is allowed to do comparisons with floating point numbers, via the equality operator, but is notified of the fact that they cannot rely on the fact that the equivalence relation defined this way is a proper equivalence relationship.
+
+This is a vast improvement over the interface system of Java, as it is both easy to find faulty implementations, and impossible to differentiate implementations for which the properties are merely a recommendation from situations where not having a strict equivalence relation is problematic.
+
+In the following paragraphs we shall cover a rather counter-intuitive aspect of equality comparisons in Rust.  Namely that the objects don't have to be of the same type.
+
+To begin with, note that we have used an "associated" type =Self::Rhs= despite not having to implement it. This is in fact a generic argument, which means that there may be multiple =impl PartialEq<SomeType>= clauses.  If =Rhs= were an associated type, =PartialEq= could be defined only once per type.  And there are specific reasons why that would be advantageous, but in this particular case, we want to relax the type requirement for equality comparisons.
+
+We would motivate this example by asking the question of whether or not in any circumstances in Rust, a reference should be compared to another reference strictly numerically.  Having, hopefully come to the conclusion that it is unnecessary[fn:27], we would then invite the reader to consider how many ways are there in Rust to represent a reference to another object.  As such it is often required to implement equivalence for objects behind an atomically counted shared reference, =Arc=.  Often if an object is behind a =Mutex= it is not possible to get direct access to any references similar to those types.
+
+Thus to support comparisons for =MutexGuard= types, the vendor of the =Mutex= library must provide a blanket implementation.  To do so, then, =PartialEq= must work for different types.  And if these comparisons satisfy equivalence relations, =Eq= can also be implemented for them.
+
+This is in stark contrast to the functional picture.  There are no types of boxes, separate from the types of values which are held in them.  As such, equivalence has no use for being generic.
+
+**** =PartialOrd=
+
+Partial ordering is yet another peculiar beast with surprising semantics.  As an indulgence let us consider how an implementation of =PartialOrd= would look for =Complex<T>=.
+
+#+BEGIN_SRC rust
+  impl<T: PartialOrd> PartialOrd for Complex<T> {
+	  fn partial_cmp(&self, other: &Rhs) -> Option<Ordering> {
+		  self.real.parial_cmp(other.real)
+	  }
+  }
+#+END_SRC
+
+Similarly to =PartialEq= there is a stronger requirement via the trait =Ord=.  Its implementation however, does entail extra work:
+
+#+BEGIN_SRC rust
+  impl<T: Ord> Ord for Complex<T> {
+	  fn cmp(&self, &Rhs) -> Ordering {
+		  self.real.cmp(other.real)
+	  }
+  }
+#+END_SRC
+
+What one might find fascinating is that there is nothing in Rust that would prevent these implementations from compiling.  The reason has to do with =Complex= numbers as we have modelled them here, and the mathematical aspects of true complex numbers.  The way we have defined ordering for =Complex= would result in fundamental problems if we were to define addition or multiplication.  Specifically, under this (projective) implementation =(0, 0).into().cmp((0,1).into())= results in equality.  The square of the imaginary unit is =-1=, while the square of =(0,0).into()= is itself.
+
+#+BEGIN_aside
+Now we might want to fix this problem by adding the imaginary comparison, and indeed, we would at least recover equality that way.  But there will still be issues with other aspects of total ordering; specifically when multiplication and addition are concerned.
+#+END_aside
+
+One must keep in mind that these implementations are what would be automatically generated for a very simple type, hence one must be exceedingly careful when applying mathematical thinking to traits, and viewing them as type-classes.  Hopefully we have demonstrated why that would be problematic to say the least.
+
+*** The orphan rule
+The Rust programming language diverges in a few key ways from the Haskell type class system.  While so far our demonstrations have been designed to differentiate Rust and Haskell, demonstrating Rust's impurity and un-fitness as far functional programming is concerned, the departures from the type class system are all reasonable, and in some ways may be considered an improvement.  In particular we would like to illustrate this on the previous example, of preventing an erroneous implementation =PartialOrd= for the type =Complex<T>=.
+
+There are two ways to resolve the issue.  One, and perhaps the most complex is to consider giving up only on the total ordering =Ord= and instead provide a =PartialOrd= implementation.  To avoid issues when interacting with multiplication or addition, we only return =Some(ordering)= if the values have a zero imaginary part, and =None= in all other cases.  This will protect us from the contradictions, although it would make the implementation rather pointless.
+
+The second option, one that the sensible majority opts for is to simply not provide an implementation.  This is quite effective when the type is included in a popular upstream library, one that does not have to integrate with anything else, and instead relies on downstream integration.  Case in point, =String= in the standard library does *not* implement =Copy=.  It is understood that if there were a way of making =String= a bit-copyable value, that the standard library maintainers would have done so.  If our =Complex<T>= were in the standard library and it did not implement =PartialOrd=, any reasonable downstream user would understand that =Complex<T>= is not amenable to partial ordering.
+
+Unlike Haskell, if a trait is not implemented in either the library that implements the structure for which it is defined (generics are special), or the library in which the trait is defined, the trait is not implemented and cannot *be* implemented by any downstream user.
+
+However, there is much room for ambiguity.  In fact it is impossible to tell in a downstream library if not implementing a specific trait is a design oversight, a temporary limitation that will later be lifted, or a statement akin to "this type should never implement this other trait".  Indeed the reason why a particular trait is not implemented can be practical: =serde= might be a too-large a library, or the trait =tracing::Value= might not be implemented, because it is far from the only logging library, and providing support for all logging libraries would either impractical or impossible.  Rust's approach is to externalise this problem: if the library is actively maintained, one can ask that to include a trait implementation if it is believed to be omitted in error.  If it is not possible to request inclusion, one can either vendor a modified version or look for an alternative.
+
+Objectively speaking the orphan rule suits Rust.  Haskell has its own reasons to prefer an open world approach, namely the high resistance to publishing packages, the terseness of the language, and the assumption that there are fewer errant programmers willing to provide an instance of a type class for a type that doesn't.
+
+*** Overlapping implementations
+
+Both Rust and Haskell reject potentially overlapping implementations (instances) of traits (type classes), with some differences.  Specifically, Rust will complain about potentially overlapping implementations as soon as possible.  Haskell will defer until it is forced to disambiguate implementation.  Haskell has a language extension[fn:28] that loosens the class resolution so that even if two instances overlap, it is possible to choose a more specific instance.  Rust, has an extremely problematic implementation of specialisation, which in addition to its soundness problems forces both the library author and all downstream users of said library to use a =nightly= compiler, and explicitly enable the feature in the translation unit(s) where the specialisation is to occur.
+
+In both languages it is highly recommended to avoid even potentially overlapping instances/implementations.  
+
+** Functions as arguments
 
 Borrowing from functional languages, Rust supports passing functions as arguments to methods and functions.  The simplest example is the following method:
 
@@ -1650,13 +1760,109 @@ One might wonder why a function like that is inherently callable once only: inde
 
 Suppose we got rid of accepting values by move, and only passed objects by borrow.  In any imperative programming language, whether or not we mutate any of the input parameters is irrelevant.  In a functional programming language, this fact is carried through via either the =Ref= or =Io= monads.  Rust is more principled than C: values can either be shared or mutable, so we need to differentiate functions that mutate their values.  But because we don't have the typical linear type system, as such we cannot extract the mutability into the output(s) of the function.  So the function itself is decorated as =FnMut=.
 
+One may then ask a very reasonable question, is =FnMut= also =FnOnce=.  Unlike most situations the answer to this question is simple.  A mutating function can be called both repeatedly, but also once.  So =FnOnce= is a strict subset, or subtype of =FnMut=, and because these are traits, not types, this form of inheritance is perfectly reasonable within the Rust framework.
 
+*** Purity
 
+Most if not all functions in Rust are fundamentally impure.  A small subset of functions, however, is pure.  There is an overlap with the =Fn= trait, but that overlap is far smaller than one might assume, and is not enforced at the type level.
+
+Specifically, we have already seen situations in which a value can change behind a shared borrow via interior mutability.  Because there are not monads inherent in Rust, it is impossible to differentiate functions which truly do not mutate the state that they borrow, from functions that do.
+
+The only way a Rust function can be guaranteed to be pure based on its signature, is if it only accepts =Copy= values by move.  Even then, this is a tenuous purity given that some foolish programmers may implement =Copy= for types which contain non-=Copy= types.  As such, one must be careful when considering whether a function that is =Fn= is truly pure and truly a function.
+
+***  Trait methods
+
+It is now important to consider how and why associated functions are called associated functions.  For all intents and purposes, bar encapsulation, an implementation is identical to a function that accepts a parameter of type =Self= in the first position.
+
+As such a mutator function is =FnMut=, a trait implementation such as =Into::into= is =FnOnce= and a getter function is =Fn=[fn:23].
+
+*** Asynchronous functions
+**** Interlude =Send= and =Sync=
+
+Now we come to the most controversial part of the topic of functions.
+
+Rust prevents inherently problematic threaded code from compiling.  However it did not initially anticipate the most common type of concurrent programming would not be threaded, but in fact asynchronous.  The reason for that change was that initially it was assumed that Rust's attempt at replicating functional patterns would lend it to sufficiently simple compiler-based multi-threading.
+
+Indeed, some of that is still present in modern Rust, namely the wonderful =rayon= library.  It was later discovered that a more efficient approach would be to allow Rust to support =Future=-based co-operative multi threading.  As it was a relatively late addition, some aspects of =async= are to this day poorly integrated with the rest of the language.  As Rust does not support higher kinded types, it is not possible to rely on the solution of functional programming languages to represent =Future=-s.  And so the work done for Rust is pioneered, so it'd be worthwhile discussing how the mechanism works and what its limitations are.
+
+As we have stated previously, Rust's type system does not have support for general purpose monads, otherwise, this point would be moot.  Additionally Rust must cater to the fact that a lot of its types have complex inner state that must be properly synchronised.  The borrow checker helps considerably in that regard, but using an =Rc= instead of =Arc= and =RefCell= instead of =Mutex= must be accounted for.
+
+As such, there are two more traits: =Send= and =Sync=.  To understand what they mean, we need to dive deep into the Von-Neumann multithreading model.
+
+Unlike the Lambda calculus, in principle every execution thread and every asynchronous runtime worker can have access to the entirety of the program's shared memory.  Given the pass-by-move semantics, it is possible to define sending an object from the areas of memory that belong to one thread to another area of memory.  If an object remains valid if passed by move from one thread to another, it is considered =Send=.
+
+If the object can also be shared without causing an inconsistency, it is considered synchronised, /i.e./  =Sync=.  One can immediately see that if the object of type =T= is =Sync= then it is shared by =&T=, and therefore =&T= must be =Send=.
+
+Now let's look at why =Rc= and =RefCell= cannot implement these traits.  We start by noting that incrementing the same number from two threads is an operation that may result in either one of the increments being lost.  As such, the reference count integer no longer represents the number of actual users of the =Rc=, and it is possible that the =Rc= is freed long before the last user of the value has been =Drop::drop=-ed.  A similar situation occurs with =RefCell=.
+
+Given that moving a type is a recursive move of all the contained data, any type that contains either an =Rc=, =RefCell= or =UnsafeCell= is also neither =Send= nor =Sync=.
+
+#+BEGIN_aside
+Technically, a raw pointer should also be marked as neither =Send= nor =Sync=, but because raw pointer operations involving dereferencing are unsafe anyway, it was decided to treat pointers as plain =Copy= values.
+#+END_aside
+
+So why is an =Arc= thread safe?  Consider that we had a very simple implementation using an =AtomicU64=.  All reads are thread safe, and in order to write to an atomic integer, we must first have read from it, so if a concurrent modification did occur, we would at least know that it did, and know what to do.  A lot of this logic is hidden, so we don't need to worry about using an =Arc= in a concurrent[fn:24] context.
+
+What this amounts to is that a piece of data that cannot be safely sent between threads is safe to be shared when wrapped with =Arc=.  Similarly, state that isn't =Sync= can be made =Sync= by wrapping it in a[fn:25] =Mutex=.
+
+Having covered these two traits we can now talk about what exactly is an =async= function.  In modern Rust these are implemented outside the compiler and there are no special exceptions made for =async=, as such a function with the definition
+
+#+BEGIN_SRC rust
+  async fn func(a: Complex) -> Box<Complex> {
+	  // ...
+  }
+#+END_SRC
+
+is merely syntactic sugar for a return position opaque generic: =impl Future<Output=Complex>=.   This necessitates another interlude.
+*** TODO Futures and runtimes
+
+So what exactly is a =Future=.  Well it's a trait, that is implemented by various types and represents a computation[fn:26] that is not running in the current thread.  Dropping the =Future= signals that the computation is not needed, and that the thread doing it can be used for other purposes.
+
+It has one method =poll= which is called when the computation is to be resumed, and when the computation is complete returns the result of it.  It also has one associated type: =Output=, which is used for type checking only.
+
+The exact elaborate dance that must take place to give programmers the illusion of simplicity is beyond the scope of this book.  Suffice it to say, most areas pertinent to asynchronous computation are still under construction.
+
+The eagle eyed reader will have at this point asked, how does the computation take place in =async=, given that =Future= only addresses the question of communicating the computation's result back to the call-site.  Well, Rust unlike Go, decided not to provide an asynchronous runtime by default or in the standard library, but instead to rely on the package ecosystem to provide one.  Indeed, while =tokio= is considered the best runtime as of writing, it is far from the only such runtime.
+
+But it is the run-time library that is responsible for spawning lightweight threads.  It can leverage POSIX threads and can perform concurrent operations with a single operating system thread.  This allows one to spawn small execution threads for tasks which are bounded by input/output bottlenecks, rather than computational complexity, even though technically =tokio= could handle those too.
+
+So let us illustrate this on a simple example:
+*** The problem of coloured functions
+** TODO Recursion
+
+Rust supports recursion to some extent.  It must be noted that defintions of some concepts, namely addition for numbers, or =Default::default= almost always harbour unwanted recursion, which has famously necessitated the implementation of =Box= as a compiler-provided type, rather than as a standard library type that could be implemented in another library.
+
+Rust [[https://github.com/rust-lang/rfcs/pull/81][doesn't guarantee]] tail call optimisation, even in places where one would expect it to be active.  Given the complexity of the Rust compiler, the intermediate representation and the machinery in LLVM, it is rather difficult to say if one can use the functional-style tail-call optimisation at all, without risking stack overflow.
+
+#+BEGIN_aside
+Rust does have areas where recursion is quite prominent if not required.  Macros in Rust have many of the features traditionally associated to functions in functional programming languages, but due to the fact they serve a different purpose, and are honed to solve a different problem, we must cover them in later chapters, focusing on function recursion for now.
+#+END_aside
+
+It might be wise to cover the implementations of certain traits.  Consider how one would implement the =Default= trait.
+
+#+BEGIN_SRC rust
+  pub struct Compound {
+	  a: A,
+	  b: B,
+	  c: C,
+	  d: D
+  }
+#+END_SRC
+
+Our structure recursively calls the default constructors for its constituent members.  This is often a rule, with very few exceptions.  Yet one cannot declare that as a short-hand.
 * Action items
 ** TODO Mention pointers and unsafe
 ** TODO Mention array index notation in the /procedural/ chapter
+** TODO Opaque generics
 
 * Appendix
+** =async_trait= and dynamic dispatch
+
+Due to complications of the Rust type system, the exact syntactic sugar when applied to a trait implementation does not work.   In fact, while in most circumstances the functions can be regarded as generic, to this day, the implementation of =async= in trait associated functions must desugar to a different construct to act as one would expect them to.  Namely, they desugar to
+#+BEGIN_SRC rust
+  Box<Pin<Future + Send + Sync + 'lifetime>
+#+END_SRC
+Which utilises *dynamic dispatch*, even though it should be noted that the LLVM compiler may still inline the virtual calls.  Rust version =1.75= roughly addressed the impossibility of using the previous definition, at all, but it still does not permit constructing trait objects out of traits with =async= functions.
 
 ** Worked example: custom traits
 
@@ -1696,6 +1902,17 @@ Firstly, consider how a complex number is defined in abstract mathematical terms
 
 
 * Footnotes
+[fn:28] To be fair, Haskell's implementation is deprecated as of  GHC 7. 
+
+[fn:27] To understand why, consider that Rust does indeed have pointers.  However, comparing pointers for equality is different to comparing references for equality given that in Rust specifically values are either mutable or shared.
+[fn:26] A =Promise= by contrast represents the value that may be extracted from the computation in the future.
+
+[fn:25] While the standard library =Arc= is considered good-enough in all but the most esoteric cases, there are many providers of a =Mutex= type, all of which have different trade-offs.  Including the standard library that provides both a =Mutex=, and an =RwLock=.
+
+[fn:24] It should be noted that the complexity of an atomic reference increment does impact code that doesn't need multi-threading.
+
+[fn:23] Perversely, a getter is only sensible if the value can change past creation, which is why functional languages very rarely if ever have them.
+
 [fn:22] If requested with the =move= keyword.
 
 [fn:21] and also that anonymous functions are permitted to capture objects from the enclosing scope.  This shall become important in later chapters.
