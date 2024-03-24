@@ -1356,7 +1356,50 @@ Objectively speaking the orphan rule suits Rust.  Haskell has its own reasons to
 
 Both Rust and Haskell reject potentially overlapping implementations (instances) of traits (type classes), with some differences.  Specifically, Rust will complain about potentially overlapping implementations as soon as possible.  Haskell will defer until it is forced to disambiguate implementation.  Haskell has a language extension[fn:28] that loosens the class resolution so that even if two instances overlap, it is possible to choose a more specific instance.  Rust, has an extremely problematic implementation of specialisation, which in addition to its soundness problems forces both the library author and all downstream users of said library to use a =nightly= compiler, and explicitly enable the feature in the translation unit(s) where the specialisation is to occur.
 
-In both languages it is highly recommended to avoid even potentially overlapping instances/implementations.  
+In both languages it is highly recommended to avoid even potentially overlapping instances/implementations.
+
+The reasons are quite similar, but the prevention mechanisms are different.  Haskell, living in an open world, cannot prevent potentially overlapping implementations even in principle. All it can do is ensure that if one module is not aware of another, the different implementations can work individually.  This has useful consequences when writing the program, but can potentially break if any of your downstream users would also like to adjust the implementation.
+
+In Rust the prevention mechanism stops one from generating more than one blanket implementation for more than one trait:
+#+BEGIN_SRC rust
+  impl<T: Debug> Debug for Complex<T> {
+	  //...
+  }
+
+  impl<T: Display> Display for Complex<T> {
+	  //...
+  }
+
+  // but!
+  impl<T: Debug> Display for Complex<T> {
+	  // Error, potentially overlapping
+  }
+#+END_SRC
+This sort of blanket implementation would be problematic in Haskell also, but only if one had been using a type which implements both =Debug= and =Display= is in scope.  For the respective subsets of complex numbers for types that only implement =Debug= only the debug subset is going to be used.
+
+In Rust, even writing the above implementations is going to result in a compilation error.  In this case we know for sure that there are types which implement both, because to implement =std::error::Error=, requires the overlap.  It is not possible to write a "more specific implementation" in Rust, as it would be in Haskell.
+
+#+BEGIN_SRC rust
+  impl<T: Debug> Debug for Complex<T> {
+	  //...
+  }
+
+  impl<T: Display> Display for Complex<T> {
+	  //...
+  }
+
+  // but!
+  impl<T: Debug> Display for Complex<T> {
+	  // Error, potentially overlapping
+  }
+
+  impl<T: Debug + Display> Display for Complex<T> {
+	  // Still error
+  }
+#+END_SRC
+While it might seem that this kind of specification would automatically resolve all issues, alas it does not.
+
+The corrolary of this in combination with the Orphan rule is that one would be implemeting a trait and providing a blanket implementation in far fewer cases than in /e.g./  Haskell.  But for reasons that shall become apparent later, it is also rarer to see individual implementations for custom traits, as one would expect in Haskell.
 
 ** Functions as arguments
 
@@ -1730,7 +1773,7 @@ As a middle ground, it is often said that the =anyhow= or =eyre= libraries can c
 
 However, these errors can no longer be handled in any way other than printing.  More importantly, the description of *what* went wrong is inlined into the function, meaning that while each =eyre::Result= is potentially wrapping different errors, the user is not notified of situations in which they can reasonably handle those.  Simply returning an =eyre::Result= can mask potentially different error conditions and the programmer knows nothing other than certain operations are fallible.
 
-This is a problematic situation.  And not entirely within the best practices of functional programming.
+This is a problematic situation.  And not entirely within the best practices of functional programming.  Still, even highly regarded functional programming langauges have less than ideal error handling methods, with exceptions being particularly problematic in functional programming specificially.
 
 ** Function taxonomy
 
@@ -1840,6 +1883,8 @@ Rust does have areas where recursion is quite prominent if not required.  Macros
 
 It might be wise to cover the implementations of certain traits.  Consider how one would implement the =Default= trait.
 
+Our structure recursively calls the default constructors for its constituent members.  This is often a rule, with very few exceptions.  Yet one cannot declare that as a short-hand.
+
 #+BEGIN_SRC rust
   pub struct Compound {
 	  a: A,
@@ -1848,8 +1893,159 @@ It might be wise to cover the implementations of certain traits.  Consider how o
 	  d: D
   }
 #+END_SRC
+** TODO =const=
 
-Our structure recursively calls the default constructors for its constituent members.  This is often a rule, with very few exceptions.  Yet one cannot declare that as a short-hand.
+
+* Rust as a unique language
+
+Rust is unique.  Of all the paradigms listed, Rust only fits OOP well, and even then, it is the one paradigm that it had deliberately distanced itself from, by disallowing inheritance.
+
+And while every feature listed so far had been inspired by families of languages, Rust has a few features which are specific to it, which may be regarded as inspired by specific languages which are not protypical examples of any paradigm mentioned so far.
+** Macros
+
+Many languages have macros.  Rust is unique in the roles that macros fill because of their interactions with the trait and type systems.  Some limitations, for example the fact that Rust macros can't access type information unless explicitly annotated, are unique to Rust.  Some applications, for example =derive= macros would have been useful in languages with a type class system.   This all results in a unique flavour of programming that anyone just starting out with Rust should get accustomed to.
+
+So let us begin.
+
+***  Macro applications
+
+Macros have a much wider range of applications in Rust.  Typically they are used in situations in which a domain-speicific language can simply express relationships that are clumsy using Rust's ordinary syntax.  In fact, all of the macros that we've seen so far and most of the macros that we will see in the following chapters typically do just that.
+
+It is, however, possible to use macros to execute arbitrary compile-time logic.  In principle, type checking, executing arbitrary code and having arbitrary side effects is something that macros can do, but it is considered a bad practice to do so, not to mention relatively inefficient.  However, by their very nature procedural macros are essentially a way of calling functions that accept a token stream and producing another token stream in return.  One may call external programs within procedural macros if they need to.
+
+It is important to distinguish macros by invocation.  Specifically, what they are intended to accept as input.
+
+The first and easiest to understand are function-like macros, which acccept all code that has the same token structure as Rust.  The use of these macros is reserved for cases wherein the syntax is indeed radically different.  Case in point, =print= and =println= are macros which do not follow typical Rust conventions for syntax.  They do not accept good-old-fashioned Rust except in the position of arguments, even then with limitations.  The entire point of =print= is to translate the non-Rust formatting mini-language into a more verbose language.
+
+Function-like macros can accept either parentheses, square brackets or curly braces, and while there very few rules about which syntax is preferred in which situations, it is commonly accepted for macros that accept extended blocks of text to use curly braces, square brackets to be used for macros that accept a list-like object, and parentheses in the remaining situations:
+#+BEGIN_SRC rust
+  dsl::block! {
+	  registry abc;
+
+	  abc.push $1;
+
+	  abc.push $2;
+
+	  abc ++ $3
+  }
+#+END_SRC
+In this case, the curly braces are used because the rest of Rust also uses curly braces to delimit block expressions.
+
+#+BEGIN_SRC rust
+  let list_ascending = vec![1_u64, 2, 3, 4, 5, 6, 7];
+  let mut list_of_ones: Vec<u64> = vec![1; 7];
+  list_of_ones.push(2);
+#+END_SRC
+The square brackets are used to give the user a familiar syntax.  A list in square brackets is like an array definition, while a semicolon usually means to fill the vector with the given element.
+
+#+BEGIN_SRC rust
+let countries = sqlx::query_as!(Country,
+		"
+SELECT country, COUNT(*) as count
+FROM users
+GROUP BY country
+WHERE organization = ?
+		",
+		organization
+	)
+	.fetch_all(&pool) // -> Vec<Country>
+	.await?;
+#+END_SRC
+The round parentheses are used to signal that in most situations, the code inside would have been interpreted by a function.  Because Rust's =const= is not as powerful as its procedural macros, and/or for some reason the computation must be carried out at compile time, the macro system can be used.
+
+Next there are *attribute-like* macros, which are mainly used for parsing what is ostensibly valid Rust syntax, /e.g./  a block or a function, but to change it in some way.  For example, the =tracing= library defines the =instrument= macro, which creates a span that decorates a function, the return type and signature don't change, but the information inside the signature is used to annotate the span with the precise values of the arguments for each function.
+
+#+BEGIN_SRC rust
+  #[tracing::instrument]
+  fn complex_function_that_may_misbehave(
+	  argument1: Arg1,
+	  argument2: Arg2,
+	  argument3: Arg3,
+  ) -> Result<Thing, Error> {
+	  function_that_may_log_error(argument1, argument2)?;
+	  function_that_has_event_loop_and_no_access_to_args()?;
+	  // Some work
+  }
+#+END_SRC
+
+In this scenario, the attribute macro can decorate and modify the function.  It may be bound under a different name, it may generate more than one function, it may change the behaviour of the function but by the principle of least surprise, the code inside the annotated function *must* be executed as valid Rust.
+
+Attribute-like invocations aren't always macros, for example =#[allow(clippy::unwrap_used)]= is a built-in to signal to =clippy= that /that/ lint: =unwrap_used= is OK in the following statements.
+
+Attributes can annotate the following statements, or the enclosing scope: =#![allow(clippy::unwrap_used)]= applies to the module that it's in, not the module or function that follows.
+
+It is often the case that if a special annotation is needed inside another macro, but one wants to preserve the natural Rust syntax, the attribute-like objects can be used to decorate such items, without necessarily corresponding to a macro.
+
+It'd be more appropriate to state that attribute-like macros can be used to implement special functionality by plugging into the attribute syntax that the Rust compiler already knows how to handle.
+
+Last but not least are derive macros.  These are very strict in what they must do: they always accept a valid Rust structure, that may be annotated with attributes.  They, as a rule, do not define custom syntax and never annotate anything else.
+
+The most common example is the following:
+#+BEGIN_SRC rust
+  use clap::Parser;
+
+  #[derive(Debug, Clone, Parser, serde::Deserialize, serde::Serialize)]
+  #[command(author = "me", version, about, long_about = LONG_ABOUT)]
+  pub struct Args {
+	  /// Where to bind the web server.
+	  #[serde(rename = "from")]
+	  host: Option<SocketAddr>,
+
+	  /// Where to post to
+	  #[arg(long, short)]
+	  #[serde(rename = "to")]
+	  target: String
+  }
+#+END_SRC
+In this example we are producing default implementations for traits whose name is conventionally given in the =#[derive]= annotation.  The standard library (or rather the compiler) provide ways of deriving both =Clone= and =Debug=.  While there are technically no procedural macros to which they correspond, they could be (and often are) derived in a procedural macro.
+
+Next we are providing three library implemented derive traits: =Parser= that was imported using the standard =use clap::Parser= and fully qualified =serde::Deserialize= and =serde::Serialize=.
+
+Both the =clap= and =serde= macros interpret the entirety of the body of the structure.  Clap uses the documentation string to generate a help message for the program's =--help= key.  Serde and Clap use the fact that the object is annotated with an =Option= to treat omitting the value as normal.  If we defined our own =Maybe= type which was identical to =Option= in every way, the behaviour would be different and =host= would be a required argument.
+
+Next, we provide optional information specifically to =serde=.  The authors of the macro decided to make any annotation of the style =serde(<expr>)= mean directives to be parsed by =serde=.  In this case the directive is to rename the option to =from= in the supported formats.  =Clap= follows a different convetion: it parses every =arg= annotation.  Additionally, clap applies an overall =command= annotation to the structure, which =serde= can see, but ignores.  The code inside of the annotations is a mini-language in which omission of certain terms can have significance[fn:29].
+
+Derive macros are usually provided if there is a clear default that can be gleaned directly from the structure, and supplemented by external information.   Because procedural macros are procedures that accept tokenised code and return tokenised Rust code, and =derive= macros annotate the structure and not any other code fragment.  The reason is that they must see the structure's fields.  This limiatation shall become important later.
+
+*** Macros by type
+
+Rust supports defining macros in two ways[fn:30].  The commonly accepted opinion is that it is easier to write declarative macros.  And while that statement may be true subjectively, declarative macros are more limited in what they can do, much harder to read, and often result in unoptimised recursion.  By contrast, well-written procedural macros differ only in the amount of boilerplate, more powerful and much easier to unit test.  Crucially, it is easier to write optimised code with procedural macros.
+
+For this reason this book will go against the common "wisdom" and cover procedural macros first.
+
+The Rust infrastructure favours procedural macros compiled from Rust source code.  This is not a hard requirement, as much as a convention.
+
+*** Procedural macros in-depth
+
+It is a common misconception to think that procedural macros are more difficult to write.  This perception is due to a combination of the following:
+1) The more involved attribute-like and derive macros can only be written using procedural macros.
+2) Rust inherently only provides access to the tokenizer and not the parser, meaning that one has to use external libraries to parse said structures.
+3) The libraries typically used for procedural macro creation: =syn= and =quote=, are rather difficult to work with.
+
+Because of that, it is quite likely that the procedural macro that you are likely to be writing, is likely not going to be a good experience.  But in all fairness, the barrier of entry to procedural macros is rather low.
+
+One only needs to create a new crate, with the extra option of =proc-macro = true= set in its =Cargo.toml=, and write a single function annotated with /e.g./  =proc_macro_derive(NameOfTrait)= and be off to the races.
+
+A hello world program looks relatively simple:
+#+BEGIN_SRC rust
+  #[proc_macro]
+  fn hello_world(input: TokenStreaem) -> TokenStream {
+	  "fn hello_world() -> { println!(\"Hello world\"); }".into()
+  }
+#+END_SRC
+
+#+BEGIN_aside
+The appalling quality of =syn=  and =quote= is a matter of perspective and by no means an evaluation of the skills of its authors.
+
+With that said, there are compounding reasons why these crates are not given as much attention and of the wrong kind.
+
+Firstly, the typical users of procedural macros are self-selected experts in the language.  Certainly people with an above average mastery of the rest of the language.  They after all need not just generate correct code, but also to write a program that will always generate the correct code.  People of this kind are less likely to engage in poelmics, or to complain.  So while some design choices are questionable, once the user of =syn= and =quote= found out how to circumvent a particular problem, they are unlikely to encounter that same issue and consequently be annoyed enough to report it.
+
+Secondly, the procedural macros are typically responsible for a non-parallelisable segment of compilation that blocks compilation of every crate that depends on them.  Furthermore, these procedural macro crates are both compiled and executed.  This leads to a compound pressure to reduce the complexity of both =syn= and =quote= meaning that they are heavily feature-gated, but also that if a piece of code /could/ be omitted, it usually /is/.
+
+Thirdly and perhaps most importantly, procedural macros are under considerable development: the Rust team is inching towards relaxing a few of the restrictions imposed on procedural macros, which may potentially make both =syn=, =quote= and *any* similar crate redundant eventually.  There is a lot more incentive to make the built-ins work better, than it is to try and fix a community library.  
+#+END_aside
+
 * Action items
 ** TODO Mention pointers and unsafe
 ** TODO Mention array index notation in the /procedural/ chapter
@@ -1902,7 +2098,11 @@ Firstly, consider how a complex number is defined in abstract mathematical terms
 
 
 * Footnotes
-[fn:28] To be fair, Haskell's implementation is deprecated as of  GHC 7. 
+[fn:30] Arguably one, because the mechanism by which declarative macros are written can be perfectly replicated by means of procedural macros.
+
+[fn:29] As can whitespace in general, although practice dictates to avoid that.
+
+[fn:28] To be fair, Haskell's implementation is deprecated as of  GHC 7.
 
 [fn:27] To understand why, consider that Rust does indeed have pointers.  However, comparing pointers for equality is different to comparing references for equality given that in Rust specifically values are either mutable or shared.
 [fn:26] A =Promise= by contrast represents the value that may be extracted from the computation in the future.
